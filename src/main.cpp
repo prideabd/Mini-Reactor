@@ -1,39 +1,24 @@
-#include "ThreadPool.h"
+#include "EventLoop.h"
+#include "TcpServer.h"
 #include <iostream>
-#include <unistd.h>
 
 int main() {
-    std::cout << "🚀 [主线程]: 初始化 2 个线程的线程池..." << std::endl;
-    ThreadPool pool(2);
+    std::cout << "=========================================================" << std::endl;
+    std::cout << "🎮 [系统初始化]: 开启工业级 Multi-Reactor 多反应堆网络服务..." << std::endl;
+    std::cout << "=========================================================" << std::endl;
 
-    // 1. 投递任务 1 和 2，把 2 个线程全部占满
-    pool.AddTask([]() {
-        std::cout << " 🛠️ [任务 1]: 开始全力干活..." << std::endl;
-        ::sleep(1);
-        std::cout << " 🛠️ [任务 1]: 大功告成！" << std::endl;
-    });
+    // 1. 实例化主反应堆（只负责管理 Acceptor 的事件）
+    EventLoop main_loop;
 
-    pool.AddTask([&pool]() {
-        std::cout << " 🔥 [任务 2]: 开始全力干活..." << std::endl;
-        ::sleep(1);
-        std::cout << " 🔥 [任务 2]: 突然在子线程内部执行 pool.Stop()！" << std::endl;
-        
-        pool.Stop(); // 💥 宣布线程池不再营业
-    });
+    // 2. 实例化高性能总服务器类
+    // 参数含义：绑定的主 loop 指针、监听端口 8888、并发 SubReactor 子线程数量设为 3 个
+    TcpServer server(&main_loop, 8888, 3);
 
-    // 2. 🔥 主线程故意睡 2 秒，确保任务 2 的 Stop() 已经彻底执行完毕
-    std::cout << "🚀 [主线程]: 正在等待子线程掀桌子..." << std::endl;
-    ::sleep(2);
+    // 3. 启动大管家
+    server.Start();
 
-    // 3. 💥 此时线程池已经关闭。主线程试图强行塞入【任务 3】
-    std::cout << "🚀 [主线程]: 尝试在 Stop 后偷偷投递【任务 3】..." << std::endl;
-    pool.AddTask([]() {
-        std::cout << " ❌ [任务 3]: 如果我被打印出来，那 AddTask 的拦截就失效了！" << std::endl;
-    });
+    // 4. 主线程开启永不停歇的事件轮盘
+    main_loop.Loop();
 
-    std::cout << "🚀 [主线程]: 等待 1 秒看任务 3 会不会蹦出来..." << std::endl;
-    ::sleep(1);
-    
-    std::cout << "🚀 [主线程]: 测试结束，安全退出。" << std::endl;
     return 0;
 }

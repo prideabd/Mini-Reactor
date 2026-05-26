@@ -8,6 +8,7 @@
 #include <cerrno>
 
 #include "EventLoop.h"
+#include "Channel.h"
 
 static constexpr int kInitEventListSize = 16;
 
@@ -17,6 +18,7 @@ EventLoop::EventLoop()
       quit_(false),
       events_(kInitEventListSize) 
 {
+    pthread_mutex_init(&mutex_, nullptr); // 初始化互斥锁
     // 1. 创建 epoll实例
     // 使用 EPOLL_CLOEXEC 防止 fork 子线程时泄露文件描述符
     // :: 代表全局作用域限定符，告诉编译器调用的是Linux系统自带的接口函数
@@ -27,20 +29,24 @@ EventLoop::EventLoop()
         ::exit(EXIT_FAILURE);
     }
 
-    // 2. 创建用于跨线程唤醒的 wakeup_fd_
+    // 2. 创建用于跨线程唤醒的 wakeup_fd_ (主要就是唤醒主线程)
     wakeup_fd_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (wakeup_fd_ < 0) {
         std::cerr << "EventLoop: eventfd 创建失败, errno = " << errno << std::endl;
+        ::exit(EXIT_FAILURE);
     }
 
     // 3. 将 wakeup_fd_  注册到 epoll 树上进行监听
-    struct epoll_event ev;
-    ::memset(&ev, 0, sizeof(ev));
-    ev.events = EPOLLIN | EPOLLET; // 可读事件和边缘触发
-    ev.data.fd = wakeup_fd_;
-    if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, wakeup_fd_, &ev) < 0) {
-        std::cerr << "EventLoop: epoll_ctl 绑定 wakeup_fd_ 失败, errno = " << errno << std::endl;
-    }
+    wakeup_channel_ = std::make_unique<Channel>(this, wakeup_fd_);
+    wakeup_channel_->SetReadCallback(std::bind(&EventLoop::HandleRead, this));
+    wakeup_channel_->EnableReading();
+    // struct epoll_event ev;
+    // ::memset(&ev, 0, sizeof(ev));
+    // ev.events = EPOLLIN | EPOLLET; // 可读事件和边缘触发
+    // ev.data.fd = wakeup_fd_;
+    // if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, wakeup_fd_, &ev) < 0) {
+    //     std::cerr << "EventLoop: epoll_ctl 绑定 wakeup_fd_ 失败, errno = " << errno << std::endl;
+    // }
 }
 
 EventLoop::~EventLoop() {
@@ -51,6 +57,7 @@ EventLoop::~EventLoop() {
     if (epoll_fd_ >= 0) {
         ::close(epoll_fd_);
     }
+    pthread_mutex_destroy(&mutex_); // 销毁互斥锁
 }
 
 void EventLoop::Loop() {
@@ -73,23 +80,16 @@ void EventLoop::Loop() {
             break;
         }
 
-        // 遍历并分发所有就绪事件
+        // 处理 epoll 树上被内核触发的信号事件
         for (int i = 0; i < nfds; ++i) {
-            int fd = events_[i].data.fd;
-
-            // 如果是跨线程唤醒的信号来了
-            if (fd == wakeup_fd_) {
-                HandleRead(); // 读出 8 字节， 清空事件计数器
-            } else {
-                // ====================================================
-                // 💡 留给你的 Mini-Reactor 扩展：
-                // 这里应该通过 fd 找到你封装的 Channel 对象或对应的回调函数
-                // 例如：Channel* channel = static_cast<Channel*>(events_[i].data.ptr);
-                //       channel->HandleEvent(events_[i].events);
-                // ====================================================
-                std::cout << "收到普通客户端 FD [" << fd << "] 的网络事件" << std::endl;
-            }
+            Channel* channel = static_cast<Channel*>(events_[i].data.ptr);
+            channel->SetRevents(events_[i].events); // 设定实际 revents_
+            channel->HandleEvent(); // 根据实际 revents_ 调用对应函数
         }
+
+        // 顺手把别的线程（比如主线程）委托给我的跨线程任务全部一口气干完！
+        // 比如：真正执行新连接挂树、真正执行退出（Quit）
+        DoPendingFunctors();
 
         // ⭐【自适应动态扩容机制】
         // 如果本次活跃的事件数量（nfds）正好把整个 vector 给填满了
@@ -100,9 +100,81 @@ void EventLoop::Loop() {
     }
 }
 
+/**
+ * @brief 异步跨线程任务投递接口（Reactor 控制反转的核心纽带）
+ * @note  任意线程都可调用此函数，将控制命令（Lambda）安全运送到当前 Loop 专属线程内执行
+ * @param cb 待执行的跨线程异步回调任务
+ */
+void EventLoop::QueueInLoop(Functor cb) {
+    {
+        pthread_mutex_lock(&mutex_);
+        pending_functors_.emplace_back(std::move(cb));
+        pthread_mutex_unlock(&mutex_);
+    }
+    // 告知主线程，执行 DoPendingFunctors
+    Wakeup();
+}
+
+void EventLoop::DoPendingFunctors() {
+    std::vector<Functor> functors;
+    // 绝不穿锁去一个个执行 functor ！因为 functor 内部业务长短不可控。
+    // 如果穿锁执行，会导致外部子线程在调用 QueueInLoop 时被锁长时间卡死。
+    // 用一个空的局部 vector，在锁保护下与全局变量进行秒级的地址置换（swap），随即解锁！
+    pthread_mutex_lock(&mutex_);
+    functors.swap(pending_functors_);
+    pthread_mutex_unlock(&mutex_);
+    for (const auto& functor : functors) {
+        if (functor) {
+            functor();
+        }
+    }
+}
+
+// 将 channel 更新到 epoll 树上，方便监听
+void EventLoop::UpdateChannel(Channel* channel) {
+    struct epoll_event ev;
+    ::memset(&ev, 0, sizeof(ev));
+    ev.events = channel->GetEvents();
+    ev.data.ptr = channel; // data 是一个联合体，传指针比 fd 效果更好（不用去内存搜索位置）
+    int fd = channel->GetFd();
+    int index = channel->GetIndex(); // 获取当前状态
+
+    if (index == -1 || index == 2) {
+        // -1表示全新， 2表示被注销，那么就表示都不在树上，调用EPOLL_CTL_ADD
+        if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev) == 0) {
+            channel->SetIndex(1); // 修改状态为 1
+        } else {
+            std::cerr << "epoll_ctl ADD 失败" << std::endl;
+        }
+    } else if (index == 1) {
+        // 1: 已经在树上，调用EPOLL_CTL_MOD
+        if (channel->IsNoneEvent()) {
+            // 如果上层调用了 DisableAll() 导致 events_ 变为 0，说明它对任何事件都不感兴趣了
+            // 我们可以选择直接 DEL，或者用 MOD 把它挂空，并把状态改写为“已被注销(2)”
+            if (::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev) == 0) {
+                channel->SetIndex(2); 
+            }
+        } else {
+            if (::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                std::cerr << "epoll_ctl MOD 失败" << std::endl;
+            }
+        }
+    }
+}
+
+void EventLoop::RemoveChannel(Channel* channel) {
+    int fd = channel->GetFd();
+    int index = channel->GetIndex();
+    if (index == 1 || index == 2) {
+        // 只有在树上或者被挂空的连接，才执行真正的内核 DEL 拔树动作
+        ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+    }
+    channel->SetIndex(-1); // 修改状态为 -1
+}
+
 void EventLoop::Wakeup() {
     uint64_t one = 1;
-    // 跨线程向 wakeup_fd_ 写入 8 个字节
+    // 跨线程:向 wakeup_fd_ 写入 8 个字节, 这样就能告知 epoll 有变动，快去唤醒主线程
     // 此时内核中的计数器累加，立刻会触发该 wakeup_fd_ 的可读事件，从而把主线程从 epoll_wait 中踢醒
     ssize_t n = ::write(wakeup_fd_, &one, sizeof(one));
     if (n != sizeof(one)) {

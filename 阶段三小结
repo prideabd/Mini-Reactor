@@ -1,0 +1,75 @@
+### 🚀 阶段三：Multi-Reactor（多反应堆）满血版架构总结
+
+在阶段三中，我们完成了整个 Mini-Reactor 框架的**灵魂级跨越**——从最初的“单反应堆+计算线程池”模型，演进为现代工业级网络库（如 Muduo、Netty）普遍采用的 **Multi-Reactor（One Loop Per Thread，一个线程一个事件循环）** 顶级并发架构。
+
+---
+
+### 🧱 一、 核心重构与组件演进对照
+
+在本阶段，我们对原有的代码结构进行了大刀阔斧的重构，各组件的职责发生重大变化：
+
+| 组件名称 | 阶段二（Single-Reactor）的角色 | 阶段三（Multi-Reactor）的华丽蜕变 |
+| --- | --- | --- |
+| **`EventLoop`** | 全局只有一个，主线程独占。既管连接，又管所有读写 I/O。 | **多实例退化**。一个主 Loop（Main-Reactor）管大门；多个子 Loop（Sub-Reactor）各自垄断一部分客户端。 |
+| **`ThreadPool`** | 通用的**计算任务队列线程池**，子线程抢占式完成业务计算。 | 升级为 **`EventLoopThreadPool`（I/O 线程池）**。每个子线程栈区**强行跑起一个 `EventLoop::Loop()**`。 |
+| **`Acceptor`** | 无该组件，所有的 `socket/bind/listen/accept` 全堆在 `main.cpp`。 | **组件化抽象**。独占 Main-Reactor，以 ET 模式死守 8888 端口，提取到连接后立刻向外抛出。 |
+| **`TcpServer`** | 无该组件。 | **终极大管家**。统筹 `Acceptor` 与 `EventLoopThreadPool`，作为门面（Facade）解耦底层与业务。 |
+
+---
+
+### 🎨 二、 核心技术“破局点”
+
+1. **Round-Robin 轮询分发**：
+主反应堆（Main-Reactor）的 `Acceptor` 提取到新客户端 `conn_fd` 后，通过滚动计数器，雨露均沾地将连接指派给某个工作子线程（Sub-Reactor）。
+2. **跨线程无锁投递（`QueueInLoop` + `eventfd`）**：
+Main-Reactor 不能直接操作 Sub-Reactor 的 Epoll 树。主线程将“挂载/注销红黑树”的代码打包成 Lambda 闭包，塞进子线程的待办队列中，并写入 `eventfd` 跨线程踢醒子线程。子线程醒来后在**自己的线程时间片里执行挂载**，彻底避免了多线程竞态锁。
+3. **金蝉脱壳（`release()`）与对象生命周期接力**：
+为了防止客户端 `Ctrl + C` 下线时引发的多线程野指针崩溃（Segmentation Fault），主线程利用 `it->second.release()` 剥离 `unique_ptr` 控制权，转为裸指针并打包进 Lambda。连接的“生死大权”像接力棒一样传递到子线程队列中，由子线程从 Epoll 树彻底安全移除后，**亲手执行 `delete` 火化**。
+
+---
+
+### 🗂️ 三、 阶段三：硬核面试突破小卡片（QA 问答）
+
+你可以把以下内容保存起来，作为随时检验自己对多反应堆底层机制理解的“口袋卡片”：
+
+#### 🃏 卡片 1：One Loop Per Thread 的核心优势是什么？
+
+* **问题**：相比于阶段二“单反应堆 + 计算线程池”，多反应堆（One Loop Per Thread）强在哪里？
+* **答案**：
+1. **I/O 负载均衡**：阶段二中，主线程的单 Epoll 负责几万个连接的 I/O 触发，主线程会成为瓶颈。阶段三将几万个连接均摊到了多个子线程的 Epoll 树上，I/O 压力被强力分流。
+2. **业务与 I/O 深度绑定（无锁化）**：一个连接一旦指派给某个 Sub-Reactor，其后续的 `read`、业务逻辑、`write` 都在这同一个线程内闭环完成。**完全不需要跨线程抢占互斥锁，多核 CPU 性能被压榨到极致**。
+
+
+
+#### 🃏 卡片 2：为什么不能在主线程直接调用 `conn_channel->EnableReading()`？
+
+* **问题**：主线程 `accept4` 拿到 `conn_fd` 后，顺手调用 `EnableReading()` 把它挂上红黑树不好吗？为什么非要绕道 `QueueInLoop` 投递？
+* **答案**：
+* **绝对不行**。因为 `EnableReading()` 底层调用了 `epoll_ctl`，而这棵 Epoll 红黑树属于子线程（Sub-Reactor）。
+* 如果主线程直接调用，就意味着**多线程同时在操作同一棵 Epoll 红黑树**（子线程在 `epoll_wait`，主线程在 `epoll_ctl`）。虽然 Linux 内核对 `epoll_ctl` 内部加了锁，但在应用层会导致严重的事件时序错乱，且打破了“每个工作线程独立闭环、互不干扰”的设计优雅性。
+
+
+
+#### 🃏 卡片 3：在 `HandleClientClose` 中，为什么要执行 `release()`？
+
+* **问题**：如果不调用 `it->second.release()`，直接在哈希表里 `client_channels_.erase(it)` 会发生什么？
+* **答案**：
+* **引发服务器暴毙（段错误崩溃）**。
+* `client_channels_` 存放的是 `std::unique_ptr<Channel>`。如果不 `release()` 就直接 `erase`，智能指针由于在哈希表中被抹除，会**立刻在主线程中触发析构函数，将 `Channel` 的堆内存直接物理销毁**。
+* 此时，子线程的待办队列里可能还躺着准备去执行 `channel->Remove()` 的异步任务。等子线程被唤醒去执行时，拿到的 `channel` 已经成了一块死掉的**野指针内存**，访问它会直接被操作系统降维打击，抛出 `Segmentation Fault`，导致整个服务器进程当场崩溃。
+
+
+
+#### 🃏 卡片 4：为什么 `std::function` 会因为 `std::move` 一个 `unique_ptr` 而报错？
+
+* **问题**：之前我们尝试用 `channel_ptr_owner = std::move(channel_ptr_owner)` 传 unique_ptr 给 Lambda，为什么编译器直接罢工并提示 `target must be copy-constructible`？
+* **答案**：
+* **因为标准库 `std::function` 是个“控制狂”，它要求自己内部包裹的东西必须能被复制（Copy）**。
+* 当 Lambda 闭包中用 `std::move` 捕获了一个 `std::unique_ptr` 时，由于 `unique_ptr` 严禁拷贝，这个 Lambda 闭包整体就变成了一个**只能移动、不能拷贝的怪物（Move-only Lambda）**。
+* 当你试图把这个 Move-only Lambda 赋值给 `std::function` 任务队列时，`std::function` 内部的静态断言（`static_assert`）检测到它无法拷贝，就会无情抛出编译错误。这也是为什么最终我们退回到“裸指针+子线程手动 `delete`”或者改用 `std::shared_ptr` 的原因。
+
+
+
+---
+
+恭喜你！进行到这里，你已经亲手将这个 Mini-Reactor 推向了网络编程的工业级高地。后面不管是面试面对大厂对高性能网络库的硬核拷问，还是继续为框架添加定时器组件、HTTP 协议解析层，你都已经具备了坚不可摧的底层内功！
