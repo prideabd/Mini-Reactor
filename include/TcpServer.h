@@ -3,11 +3,13 @@
 
 #include <unordered_map>
 #include <memory>
+#include "Buffer.h"
 
 class Acceptor;
 class EventLoopThreadPool;
 class EventLoop;
-class Channel;
+class Buffer;
+class TcpConnection;
 
 class TcpServer {
 public:
@@ -18,17 +20,18 @@ public:
 
 private:
     void NewConnection(int conn_fd);    // 接管 Acceptor 传上来的新连接描述符
-    void HandleClientRead(int conn_fd); // 客户端发来信息时 I/O 回调
-    void HandleClientClose(int conn_fd);// 客户端断开连接时 I/O 回调 
+    void RemoveConnection(const std::shared_ptr<TcpConnection>& conn); 
+
+    // 业务处理入口
+    void OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* buf);
 
     EventLoop* main_loop_;
     // 独占拥有，同时表示生命周期和 TcpServer 对象相同，当 TcpServer 销毁时，自动调用独享指针的析构
     std::unique_ptr<Acceptor> acceptor_;
     std::unique_ptr<EventLoopThreadPool> thread_pool_;
 
-    // 🌟 为了延长每一个客户端连接衍生出的 Channel 的生命周期
-    // 在内存中使用一张哈希表，保护好所有在线客人的 Channel 对象
-    std::unordered_map<int, std::unique_ptr<Channel>> client_channels_;
+    // buffer 和 channel 全部放到了 TcpConnection
+    std::unordered_map<int, std::shared_ptr<TcpConnection>> connections_;
 };
 
 #endif // TCP_SERVER_H

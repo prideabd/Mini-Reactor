@@ -4,9 +4,9 @@
 
 #include "TcpServer.h"
 #include "EventLoop.h"
-#include "Channel.h"
 #include "EventLoopThreadPool.h"
 #include "Acceptor.h"
+#include "TcpConnection.h"
 
 TcpServer::TcpServer(EventLoop* main_loop, int port, size_t thread_count)
     : main_loop_(main_loop)
@@ -41,66 +41,56 @@ void TcpServer::NewConnection(int conn_fd) {
     std::cout << "🔀 [MainReactor]: 成功通过轮询算法，将客人的 FD [" << conn_fd 
               << "] 跨线程指派给指定的 SubReactor [" << sub_loop << "] 托管！" << std::endl;
     
-    // 为客户端连接实例化专属高级 Channel 经纪人，
-    auto conn_channel = std::make_unique<Channel>(sub_loop, conn_fd);
-    conn_channel->SetReadCallback(std::bind(&TcpServer::HandleClientRead, this, conn_fd));
-    conn_channel->SetCloseCallback(std::bind(&TcpServer::HandleClientClose, this, conn_fd));
+    // 实例化连接组件
+    auto conn = std::make_shared<TcpConnection>(sub_loop, conn_fd);
+    // 挂载关联回调
+    conn->SetMessageCallback(std::bind(&TcpServer::OnMessage, this, std::placeholders::_1,std::placeholders::_2));
+    conn->SetCloseCallback(std::bind(&TcpServer::RemoveConnection, this, std::placeholders::_1));
 
-    Channel* conn_channel_ptr = conn_channel.get();
-    client_channels_[conn_fd] = std::move(conn_channel);
+    connections_[conn_fd] = conn;
 
-    // 主线程告诉子线程，现在把自己绑定到 epoll 树上
-    sub_loop->QueueInLoop([conn_channel_ptr]() {
-        conn_channel_ptr->EnableReading();
+    // 告诉子线程，现在把自己绑定到 epoll 树上
+    sub_loop->QueueInLoop([conn]() {
+        conn->ConnectionEstablished();
     });
 }
 
-void TcpServer::HandleClientRead(int conn_fd) {
-    char buf[1024];
-    ::memset(buf, 0, sizeof(buf));
-    ssize_t n = ::read(conn_fd, buf, sizeof(buf));
+// 信息处理函数
+void TcpServer::OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* buf) {
+    while (buf->ReadableBytes() > 0) {
+        const char* peek_pos = buf->Peek();
+        // 扫描是否有回车 '\n'
+        const char* crlf = std::find(peek_pos, peek_pos + buf->ReadableBytes(), '\n');
+        if (crlf == peek_pos + buf->ReadableBytes()) {
+            std::cout << "⚠️ [TcpServer 业务层]: 收到残缺业务帧，挂起留存。" << std::endl;
+            break;
+        }
+        size_t package_len = crlf - peek_pos + 1;
+        std::string single_msg(peek_pos, package_len - 1); // 剥离掉 \n
+        buf->Retrieve(package_len); // 确认消费
 
-    if (n > 0) {
-        std::string msg(buf, n);
-        pthread_t cur_tid = ::pthread_self();
-        std::cout << "📩 [SubReactor 线程 " << cur_tid << "]: 收到 FD [" << conn_fd << "] 的原始消息: " << msg;
+        if (single_msg.empty()) {
+            continue;
+        }
 
-        // 回复
-        std::string reply = "【工业级 Multi-Reactor 满血版】处理回显: " + msg;
+        std::cout << "📩 [TcpServer 业务层]: 成功从 FD [" << conn->GetFd() << "] 拆出包: " << single_msg << std::endl;
 
-        // 这里需要修改，大文件、慢网络时会出现问题
-        ::write(conn_fd, reply.c_str(), reply.size());
-    } else if (n == 0) {
-        // 主动发送 Fin 包下线（ctrl + c)
-        HandleClientClose(conn_fd);
-    } else if (n < 0 && errno != EAGAIN) {
-        // 发生严重错误
-        HandleClientClose(conn_fd);
+        // 响应回显
+        std::string reply = "【解耦满血版 TcpConnection】回显: " + single_msg;
+        conn->Send(reply);
     }
 }
 
-void TcpServer::HandleClientClose(int conn_fd) {
-    auto it = client_channels_.find(conn_fd);
-    if (it != client_channels_.end()) {
-        std::cout << "👋 [TcpServer]: 监测到客户端 FD [" << conn_fd << "] 请求下线，准备斩草除根..." << std::endl;
-        // 提取出智能指针，release 函数将独占指针变为普通指针
-        // 这样当前 Channel 的生命周期就被这个局部变量一把抱住，哈希表立刻 erase 也不会引发析构！
-        auto channel_ptr_owner = it->second.release();
-
-        // 从服务器哈希表删除
-        client_channels_.erase(it);
-
-        EventLoop* sub_loop = channel_ptr_owner->GetLoop();
-
-        sub_loop->QueueInLoop([this, conn_fd, channel_ptr_owner]() {
-            channel_ptr_owner->Remove();
-            ::close(conn_fd);
-            delete channel_ptr_owner;
-            std::cout << "✨ [SubReactor]: FD [" << conn_fd << "] 资源安全释放完毕。" << std::endl;
+// 清理下线连接：利用双重 QueueInLoop 保证无锁化跨线程生命周期延续
+void TcpServer::RemoveConnection(const std::shared_ptr<TcpConnection>& conn) {
+    main_loop_->QueueInLoop([this, conn]() {
+        std::cout << "👋 [TcpServer]: 监测到客户端下线，清理生死册 Map 记录，FD [" << conn->GetFd() << "]" << std::endl;
+        // 从主线程擦除，此时因闭包捕获，conn 计数为 2，对象绝不会死亡
+        connections_.erase(conn->GetFd());
+        EventLoop* sub_loop = conn->GetLoop();
+        
+        sub_loop->QueueInLoop([conn]() {
+            conn->ConnectionDestroyed();
         });
-        // 这里会出现问题，子线程在Remove()，但是主线程已经删除了 Channel
-        // 这会导致找不到对应 channel，访问到非法内存，从而导致段错误
-        // client_channels_.erase(it);
-    }
+    });
 }
-

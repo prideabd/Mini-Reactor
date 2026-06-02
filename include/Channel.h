@@ -1,6 +1,7 @@
 #ifndef CHANNEL_H
 #define CHANNEL_H
 
+#include <sys/epoll.h>
 #include <functional>
 
 // 前置声明 EventLoop 类
@@ -46,6 +47,9 @@ public:
     int GetIndex() const { return index_; }
     void SetIndex(int index) { index_ = index; } 
     EventLoop* GetLoop() const { return loop_; }
+    // 查询当前 channel 状态
+    bool IsWriting() const { return events_ & EPOLLOUT; }
+    bool IsReading() const { return events_ & EPOLLIN; }
 
 private:  
     void Update(); // 向 epoll 树发起更新/添加请求
