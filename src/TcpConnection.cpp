@@ -1,9 +1,9 @@
-#include <iostream>
 #include <cerrno>
 #include <unistd.h>
 #include "Channel.h"
 #include "EventLoop.h"
 #include "TcpConnection.h"
+#include "Logger.h"
 
 TcpConnection::TcpConnection(EventLoop* loop, int conn_fd)
     : loop_(loop),
@@ -21,7 +21,7 @@ TcpConnection::TcpConnection(EventLoop* loop, int conn_fd)
 
 TcpConnection::~TcpConnection() {
     // 资源都在各自的内部实现销毁
-    std::cout << "✨ [TcpConnection]: 客户端 FD [" << conn_fd_ << "] 堆内存及缓存大坝成功安全火化。" << std::endl;
+    LOG_INFO << "✨ [TcpConnection]: 客户端 FD [" << conn_fd_ << "] 资源已安全释放。";
 }
 
 void TcpConnection::ConnectionEstablished() {
@@ -55,7 +55,7 @@ void TcpConnection::HandleRead() {
                 // 这是非阻塞 ET 模式下最健康的退出姿势
                 break;
             } else {
-                std::cerr << "❌ [TcpConnection::HandleRead]: 发生严重内核物理读取错误，errno = " << saved_errno << std::endl;
+                LOG_ERROR << "发生严重内核物理读取错误，FD: " << conn_fd_ << " errno: " << saved_errno;
                 error_or_close = true;
                 break;
             }
@@ -128,8 +128,8 @@ void TcpConnection::Send(const std::string& msg) {
     if (!faultError && remaining > 0) {
         output_buffer_.Append(msg.data() + nwrote, remaining);
         if (!channel_->IsWriting()) {
-            std::cout << "🔄 [TcpConnection::Send]: 内核已满！剩余 [" << remaining 
-                      << "] 字节暂存入 output_buffer，开始向红黑树挂载 EPOLLOUT 可写监听。" << std::endl;
+            LOG_DEBUG << "🔄 [TcpConnection::Send]: 内核写缓冲区已满！剩余 [" << remaining 
+                      << "] 字节暂存，启动 EPOLLOUT 监听。";
             channel_->EnableWriting(); // 注册写监听事件
         }
     }

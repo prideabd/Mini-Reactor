@@ -2,12 +2,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
-// #include <errno.h>
-#include <iostream>
 #include <cstdlib>
 #include <cerrno>
-
 #include "EventLoop.h"
+#include "Logger.h"
 #include "Channel.h"
 
 static constexpr int kInitEventListSize = 16;
@@ -24,16 +22,13 @@ EventLoop::EventLoop()
     // :: 代表全局作用域限定符，告诉编译器调用的是Linux系统自带的接口函数
     epoll_fd_ = ::epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd_< 0) {
-        std::cerr << "EventLoop: epoll_creat1 失败, errno = " << errno << std::endl;
-        // 自杀, 退出码 1 代表非正常退出
-        ::exit(EXIT_FAILURE);
+        LOG_FATAL << "EventLoop: epoll_create1 失败, errno = " << errno;
     }
 
     // 2. 创建用于跨线程唤醒的 wakeup_fd_ (主要就是唤醒主线程)
     wakeup_fd_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (wakeup_fd_ < 0) {
-        std::cerr << "EventLoop: eventfd 创建失败, errno = " << errno << std::endl;
-        ::exit(EXIT_FAILURE);
+        LOG_FATAL << "EventLoop: eventfd 创建失败, errno = " << errno;
     }
 
     // 3. 将 wakeup_fd_  注册到 epoll 树上进行监听
@@ -62,7 +57,7 @@ EventLoop::~EventLoop() {
 
 void EventLoop::Loop() {
     quit_ = false;
-    std::cout << " 主线程 EventLoop 启动，正在等待内核事件..." << std::endl;
+    LOG_INFO << "EventLoop 启动，正在等待内核事件...";
     while (!quit_) {
         // &*events_.begin(): 
         // events_.begin() 是迭代器，* 解引用得到元素对象，& 取地址得到连续物理内存的首地址。
@@ -76,7 +71,7 @@ void EventLoop::Loop() {
             if (errno == EINTR) {
                 continue;
             }
-            std::cerr << "EventLoop: epoll_wait 严重错误, errno = " << errno << std::endl;
+            LOG_ERROR << "EventLoop: epoll_wait 严重错误, errno = " << errno;
             break;
         }
 
@@ -144,7 +139,7 @@ void EventLoop::UpdateChannel(Channel* channel) {
         if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev) == 0) {
             channel->SetIndex(1); // 修改状态为 1
         } else {
-            std::cerr << "epoll_ctl ADD 失败" << std::endl;
+            LOG_ERROR << "epoll_ctl ADD 失败, fd: " << fd;
         }
     } else if (index == 1) {
         // 1: 已经在树上，调用EPOLL_CTL_MOD
@@ -156,7 +151,7 @@ void EventLoop::UpdateChannel(Channel* channel) {
             }
         } else {
             if (::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev) < 0) {
-                std::cerr << "epoll_ctl MOD 失败" << std::endl;
+                LOG_ERROR << "epoll_ctl MOD 失败, fd: " << fd;
             }
         }
     }
@@ -178,7 +173,7 @@ void EventLoop::Wakeup() {
     // 此时内核中的计数器累加，立刻会触发该 wakeup_fd_ 的可读事件，从而把主线程从 epoll_wait 中踢醒
     ssize_t n = ::write(wakeup_fd_, &one, sizeof(one));
     if (n != sizeof(one)) {
-        std::cerr << "EventLoop::Wakeup() 写入失败" << std::endl;
+        LOG_ERROR << "EventLoop::Wakeup() 写入失败";
     }
 }
 
@@ -188,12 +183,12 @@ void EventLoop::HandleRead() {
     // 必须通过 read 把这 8 个字节读出来（让内核计数器清零），否则下一次它将不会再次触发可读
     ssize_t n = ::read(wakeup_fd_, &one, sizeof(one));
     if (n != sizeof(one)) {
-        std::cerr << "EventLoop::HandleRead() 读取失败" << std::endl;
+        LOG_ERROR << "EventLoop::HandleRead() 读取失败";
     }
     // ====================================================
     // 💡 留给你的 Mini-Reactor 扩展：
     // 被唤醒后，主线程通常需要去执行被其他工作线程塞进来的异步任务队列
     // 例如：this->DoPendingFunctors();
     // ====================================================
-    std::cout << "主线程成功被跨线程【唤醒】，正在处理队列任务..." << std::endl;
+    LOG_DEBUG << "Loop 成功被跨线程【唤醒】，正在处理队列任务...";
 }

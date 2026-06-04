@@ -15,18 +15,19 @@ public:
 
     // 向内存块追加数据
     void Append(const char* buf, size_t len) {
-        if (static_cast<size_t>(avail()) > len) {
+        if (static_cast<size_t>(Avail()) > len) {
             std::memcpy(cur_, buf, len);
             cur_ += len;
         }
     }
-    const char* data() const { return data_; } // 只读不发，加 const 修饰
-    char* current() { return cur_; }           // 写驱动
-    int length() const { return static_cast<int>(cur_ - data_); }
-    int avail() const { return static_cast<int>(data_ + SIZE - cur_); }
+    const char* Data() const { return data_; } // 只读不发，加 const 修饰
+    char* Current() { return cur_; }           // 写驱动
+    int Length() const { return static_cast<int>(cur_ - data_); }
+    int Avail() const { return static_cast<int>(data_ + SIZE - cur_); }
+    void Add(size_t len) { cur_ += len; }      // 仅移动指针，避免冗余拷贝
 
-    void reset() { cur_ = data_; }
-    void bzero() { std::memset(data_, 0, sizeof(data_)); }
+    void Reset() { cur_ = data_; }
+    void Bzero() { std::memset(data_, 0, sizeof(data_)); }
 
 private:
     char data_[SIZE];
@@ -74,8 +75,8 @@ public:
         return *this;
     }
     
-    const Buffer& buffer() const { return buffer_; }
-    void resetBuffer() { buffer_.reset();}
+    const Buffer& GetBuffer() const { return buffer_; }
+    void ResetBuffer() { buffer_.Reset();}
 
 private:
     // 将整数变成字符

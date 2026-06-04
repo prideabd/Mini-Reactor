@@ -1,9 +1,9 @@
 #include <unistd.h>
 #include <cstring>
-#include <iostream>
 
 #include "TcpServer.h"
 #include "EventLoop.h"
+#include "Logger.h"
 #include "EventLoopThreadPool.h"
 #include "Acceptor.h"
 #include "TcpConnection.h"
@@ -20,7 +20,7 @@ TcpServer::TcpServer(EventLoop* main_loop, int port, size_t thread_count)
 }
 
 TcpServer::~TcpServer() {
-    std::cout << "🧬 [TcpServer]: 正在执行工业级防弹停机流程..." << std::endl;
+    LOG_INFO << "🧬 [TcpServer]: 正在执行工业级防弹停机流程...";
     if (acceptor_) {
         acceptor_->Stop();
     }
@@ -38,8 +38,8 @@ void TcpServer::NewConnection(int conn_fd) {
     // 采用轮询，首先找到一个工作子线程 subReactor
     EventLoop* sub_loop = thread_pool_->GetNextLoop();
 
-    std::cout << "🔀 [MainReactor]: 成功通过轮询算法，将客人的 FD [" << conn_fd 
-              << "] 跨线程指派给指定的 SubReactor [" << sub_loop << "] 托管！" << std::endl;
+    LOG_INFO << "🔀 [MainReactor]: 成功通过轮询算法，将客人的 FD [" << conn_fd 
+             << "] 指派给指定的 SubReactor [" << sub_loop << "] 托管！";
     
     // 实例化连接组件
     auto conn = std::make_shared<TcpConnection>(sub_loop, conn_fd);
@@ -62,7 +62,7 @@ void TcpServer::OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* bu
         // 扫描是否有回车 '\n'
         const char* crlf = std::find(peek_pos, peek_pos + buf->ReadableBytes(), '\n');
         if (crlf == peek_pos + buf->ReadableBytes()) {
-            std::cout << "⚠️ [TcpServer 业务层]: 收到残缺业务帧，挂起留存。" << std::endl;
+            LOG_WARN << "⚠️ [TcpServer 业务层]: 收到残缺业务帧，挂起留存。";
             break;
         }
         size_t package_len = crlf - peek_pos + 1;
@@ -73,7 +73,7 @@ void TcpServer::OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* bu
             continue;
         }
 
-        std::cout << "📩 [TcpServer 业务层]: 成功从 FD [" << conn->GetFd() << "] 拆出包: " << single_msg << std::endl;
+        LOG_INFO << "📩 [TcpServer 业务层]: 成功从 FD [" << conn->GetFd() << "] 拆出包: " << single_msg;
 
         // 响应回显
         std::string reply = "【解耦满血版 TcpConnection】回显: " + single_msg;
@@ -84,7 +84,7 @@ void TcpServer::OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* bu
 // 清理下线连接：利用双重 QueueInLoop 保证无锁化跨线程生命周期延续
 void TcpServer::RemoveConnection(const std::shared_ptr<TcpConnection>& conn) {
     main_loop_->QueueInLoop([this, conn]() {
-        std::cout << "👋 [TcpServer]: 监测到客户端下线，清理生死册 Map 记录，FD [" << conn->GetFd() << "]" << std::endl;
+        LOG_INFO << "👋 [TcpServer]: 监测到客户端下线，清理 Map 记录，FD [" << conn->GetFd() << "]";
         // 从主线程擦除，此时因闭包捕获，conn 计数为 2，对象绝不会死亡
         connections_.erase(conn->GetFd());
         EventLoop* sub_loop = conn->GetLoop();

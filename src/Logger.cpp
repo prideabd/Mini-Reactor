@@ -1,34 +1,79 @@
-// 简易实现
+#include "Logger.h"
+#include <cstdio>
 #include <sys/time.h>
 #include <time.h>
-#include <iostream>
-#include "Logger.h"
+#include <cstdlib>
+
+// 默认输出函数：向标准输出打印
+void DefaultOutput(const char* msg, int len) {
+    fwrite(msg, 1, len, stdout);
+}
+
+// 默认刷新函数
+void DefaultFlush() {
+    fflush(stdout);
+}
+
+// 定义全局回调指针，初始化为默认的控制台输出
+Logger::OutputFunc g_output = DefaultOutput;
+Logger::FlushFunc g_flush = DefaultFlush;
+
+void Logger::SetOutput(Logger::OutputFunc out) {
+    if (out == nullptr) {
+        g_output = DefaultOutput;
+    } else {
+        g_output = out;
+    }
+}
+
+void Logger::SetFlush(Logger::FlushFunc flush) {
+    if (flush == nullptr) {
+        g_flush = DefaultFlush;
+    } else {
+        g_flush = flush;
+    }
+}
+
+const char* LevelNames[] = {
+    "TRACE ",
+    "DEBUG ",
+    "INFO  ",
+    "WARN  ",
+    "ERROR ",
+    "FATAL ",
+};
 
 Logger::Impl::Impl(LogLevel level, const char* filename, int line)
-    : level_(level),
+    : stream_(),
+      level_(level),
       line_(line),
-      filename_(filename)
-{
-    FormatTime();
+      filename_(filename) {
+    FormatTime();           // 1. 写入时间戳
+    stream_ << LevelNames[level]; // 2. 写入日志级别
 }
+
 void Logger::Impl::FormatTime() {
     struct timeval tv;
     gettimeofday(&tv, nullptr);
     time_t time = tv.tv_sec;
     struct tm tm_time;
     localtime_r(&time, &tm_time);
-    char str_time[64] = {0};
-    snprintf(str_time, sizeof(str_time), "[%04d-%02d-%02d %02d:%02d:%02d.%06ld] ",
-             tm_time.tm_year + 1900, tm_time.tm_mon + 1, tm_time.tm_mday,
-             tm_time.tm_hour, tm_time.tm_min, tm_time.tm_sec, tv.tv_usec);
-    stream_ << str_time;
+    char buf[64] = {0};
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_time);
+    stream_ << buf << "." << static_cast<int>(tv.tv_usec) << " ";
 }
 
-Logger::Logger(const char* filename, int line, LogLevel level) : impl_(level, filename, line)
-{
+Logger::Logger(const char* filename, int line, LogLevel level)
+    : impl_(level, filename, line) {
 }
+
 Logger::~Logger() {
     impl_.stream_ << " -- " << impl_.filename_ << ":" << impl_.line_ << "\n";
-    const LogStream::Buffer& buf(impl_.stream_.buffer());
-    std::cout.write(buf.data(), buf.length());
+    const LogStream::Buffer& buf(Stream().GetBuffer());
+    g_output(buf.Data(), buf.Length()); // 析构时真正执行输出回调
+    
+    if (impl_.level_ == FATAL) {
+        g_flush();
+        abort(); // FATAL 级别直接终止程序
+    }
 }

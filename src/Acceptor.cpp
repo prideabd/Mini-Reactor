@@ -2,10 +2,10 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <cstring>
-#include <iostream>
 #include "EventLoop.h"
 #include "Channel.h"
 #include "Acceptor.h"
+#include "Logger.h"
 
 Acceptor::Acceptor(EventLoop* loop, int port)
     : loop_(loop), listen_fd_(-1)
@@ -13,8 +13,7 @@ Acceptor::Acceptor(EventLoop* loop, int port)
     // 创建非阻塞监听套接字
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (listen_fd_ < 0) {
-        std::cerr << "❌ [错误]: 创建监听 socket 失败！" << std::endl;
-        ::exit(EXIT_FAILURE);
+        LOG_FATAL << "创建监听 socket 失败！";
     }
 
     int opt = 1;
@@ -26,9 +25,8 @@ Acceptor::Acceptor(EventLoop* loop, int port)
     addr.sin_port = htons(port);
 
     if (::bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "❌ [错误]: 绑定端口 8888 失败！" << std::endl;
         ::close(listen_fd_);
-        ::exit(EXIT_FAILURE);
+        LOG_FATAL << "绑定端口 8888 失败！";
     }
 
     // 实例化专属 channel, 只进行绑定， 当前只做配置
@@ -47,12 +45,11 @@ Acceptor::~Acceptor() {
 
 void Acceptor::Listen() {
     if (::listen(listen_fd_, SOMAXCONN) < 0) {
-        std::cerr << "❌ [错误]: Listen 监听失败！" << std::endl;
-        ::exit(EXIT_FAILURE);
+        LOG_FATAL << "Listen 监听失败！";
     }
     // 这里才真正将 listen_fd_ 放置到 epoll 树上
     accept_channel_->EnableReading();
-    std::cout << "🌍 [网络网络]: 成功监听 8888 端口，正在等待客户端连接叩门..." << std::endl;
+    LOG_INFO << "🌍 [网络网络]: 成功监听 8888 端口，正在等待客户端连接叩门...";
 }
 
 void Acceptor::Stop() {
@@ -60,7 +57,7 @@ void Acceptor::Stop() {
         accept_channel_->DisableAll();
         accept_channel_->Remove();
     }
-    std::cout << "🛑 [Acceptor]: 已成功关闭端口 8888 的监听，大门已关闭，不再接受新连接。" << std::endl;
+    LOG_INFO << "🛑 [Acceptor]: 已成功关闭端口 8888 的监听，大门已关闭，不再接受新连接。";
 }
 
 void Acceptor::HandleRead() {
@@ -70,7 +67,7 @@ void Acceptor::HandleRead() {
     while (true) {
         int conn_fd = ::accept4(listen_fd_, (struct sockaddr*)&client_addr, &client_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (conn_fd >= 0) {
-            std::cout << "🎉 [新客户上线]: 成功接入客户端 FD [" << conn_fd << "]！" << std::endl;
+            LOG_INFO << "🎉 [新客户上线]: 成功接入客户端 FD [" << conn_fd << "]！";
             if (new_connection_callback_) {
                 new_connection_callback_(conn_fd);
             }
@@ -83,7 +80,7 @@ void Acceptor::HandleRead() {
             if (errno == EINTR) { // 排除信号中断
                 continue;
             }
-            std::cerr << "❌ [严重错误]: accept4 发生未预期的底层异常, errno = " << errno << std::endl;
+            LOG_ERROR << "accept4 发生未预期的底层异常, errno = " << errno;
             break;
         }
     }

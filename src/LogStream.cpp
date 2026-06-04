@@ -7,8 +7,8 @@ const char* zero = digits + 9;
 // 无 if/else 整型转字符（包括负数）
 template <typename T>
 void LogStream::FormatInteger(T v) {
-    if (buffer_.avail() >= 32) {
-        char* buf = buffer_.current();
+    if (buffer_.Avail() >= 32) {
+        char* buf = buffer_.Current();
         char* p = buf;
         T i = v;
         do {
@@ -59,9 +59,9 @@ LogStream& LogStream::operator<<(unsigned long long v) {
 }  
 LogStream& LogStream::operator<<(double v) {
     // 浮点数处理
-    if (buffer_.avail() >= 32) {
-        int len = snprintf(buffer_.current(), 32, "%.12g", v);
-        buffer_.Append(buffer_.current(), len);
+    if (buffer_.Avail() >= 32) {
+        int len = snprintf(buffer_.Current(), 32, "%.12g", v);
+        buffer_.Add(len); // 直接移动偏移量，效率更高
     }
     return *this;
 }

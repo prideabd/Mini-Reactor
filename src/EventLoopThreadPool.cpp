@@ -1,6 +1,6 @@
-#include <iostream>
 #include "EventLoopThreadPool.h"
 #include "EventLoop.h"
+#include "Logger.h"
 
 EventLoopThreadPool::EventLoopThreadPool(EventLoop* main_loop, size_t thread_count)
     : main_loop_(main_loop),
@@ -33,9 +33,7 @@ void EventLoopThreadPool::Start() {
             // 销毁锁，防止资源泄漏
             pthread_mutex_destroy(&data.mutex);
             pthread_cond_destroy(&data.cond);
-            // 打印错误日志，线程创建失败属于致命错误
-            std::cerr << "❌ [Fatal Error]: pthread_create 失败! 错误码 = " << ret << std::endl;
-            ::exit(EXIT_FAILURE);
+            LOG_FATAL << "pthread_create 失败! 错误码 = " << ret;
         }
         // 创建成功后，主线程拿锁开始等待
         pthread_mutex_lock(&data.mutex);
@@ -51,7 +49,7 @@ void EventLoopThreadPool::Start() {
         pthread_mutex_destroy(&data.mutex);
         pthread_cond_destroy(&data.cond);
     }
-    std::cout << "🚀 [SubReactors]: 成功初始化 " << thread_count_ << " 个独立的 SubReactor 线程池！" << std::endl;
+    LOG_INFO << "🚀 [SubReactors]: 成功初始化 " << thread_count_ << " 个独立的 SubReactor 线程池！";
 }
 
 void EventLoopThreadPool::Stop() {
