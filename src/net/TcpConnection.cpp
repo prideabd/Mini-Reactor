@@ -1,9 +1,9 @@
 #include <cerrno>
 #include <unistd.h>
-#include "Channel.h"
-#include "EventLoop.h"
-#include "TcpConnection.h"
-#include "Logger.h"
+#include "reactor/net/Channel.h"
+#include "reactor/net/EventLoop.h"
+#include "reactor/net/TcpConnection.h"
+#include "reactor/log/Logger.h"
 
 TcpConnection::TcpConnection(EventLoop* loop, int conn_fd)
     : loop_(loop),

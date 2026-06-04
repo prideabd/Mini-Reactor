@@ -1,12 +1,12 @@
 #include <unistd.h>
 #include <cstring>
 
-#include "TcpServer.h"
-#include "EventLoop.h"
-#include "Logger.h"
-#include "EventLoopThreadPool.h"
-#include "Acceptor.h"
-#include "TcpConnection.h"
+#include "reactor/net/TcpServer.h"
+#include "reactor/net/EventLoop.h"
+#include "reactor/net/EventLoopThreadPool.h"
+#include "reactor/net/Acceptor.h"
+#include "reactor/net/TcpConnection.h"
+#include "reactor/log/Logger.h"
 
 TcpServer::TcpServer(EventLoop* main_loop, int port, size_t thread_count)
     : main_loop_(main_loop)
@@ -79,6 +79,9 @@ void TcpServer::OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* bu
         std::string reply = "【解耦满血版 TcpConnection】回显: " + single_msg;
         conn->Send(reply);
     }
+    // if (message_callback_) {
+    //     message_callback_(conn, buf);
+    // }
 }
 
 // 清理下线连接：利用双重 QueueInLoop 保证无锁化跨线程生命周期延续

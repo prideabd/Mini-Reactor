@@ -1,5 +1,5 @@
 #include <algorithm>
-#include "LogStream.h"
+#include "reactor/log/LogStream.h"
 
 const char digits[] = "9876543210123456789";
 const char* zero = digits + 9;
