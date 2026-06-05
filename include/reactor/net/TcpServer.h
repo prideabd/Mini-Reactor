@@ -1,9 +1,17 @@
 #ifndef TCP_SERVER_H
 #define TCP_SERVER_H
 
+/**
+ * @file TcpServer.h
+ * @brief TCP 服务器核心类，负责监听新连接、管理连接池以及将连接分发到 EventLoop 线程池。
+ */
 #include <unordered_map>
 #include <memory>
-#include "Buffer.h"
+#include <functional>
+
+#include "reactor/net/Buffer.h"
+
+namespace reactor::net {
 
 class Acceptor;
 class EventLoopThreadPool;
@@ -13,10 +21,15 @@ class TcpConnection;
 
 class TcpServer {
 public:
+    using MessageCallback = std::function<void(const std::shared_ptr<TcpConnection>&, Buffer*)>;
+
     TcpServer(EventLoop* main_loop, int port, size_t thread_count);
     ~TcpServer();
 
     void Start();
+
+    // 提供给外部（如 HTTP 模块）注入协议解析器的接口
+    void setMessageCallback(const MessageCallback& cb) { message_callback_ = cb; }
 
 private:
     void NewConnection(int conn_fd);    // 接管 Acceptor 传上来的新连接描述符
@@ -32,6 +45,10 @@ private:
 
     // buffer 和 channel 全部放到了 TcpConnection
     std::unordered_map<int, std::shared_ptr<TcpConnection>> connections_;
+
+    MessageCallback message_callback_; // 回调函数
 };
+
+} // namespace reactor::net
 
 #endif // TCP_SERVER_H

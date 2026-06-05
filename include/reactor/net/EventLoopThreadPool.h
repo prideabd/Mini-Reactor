@@ -1,12 +1,18 @@
 #ifndef EVENT_LOOP_THREAD_POOL_H
 #define EVENT_LOOP_THREAD_POOL_H
 
+/**
+ * @file EventLoopThreadPool.h
+ * @brief EventLoop 线程池，用于管理和分发 EventLoop 到多个子线程，实现多线程网络服务。
+ */
 // 每个子线程启动时，都去跑一个EventLoop::Loop()
 // 一个子线程 绑定 一个 epoll 树，可以接受多个 client_fd
 // 这样，几个子线程就有几个 epoll 树
 
 #include <pthread.h>
 #include <vector>
+
+namespace reactor::net {
 
 class EventLoop;
 
@@ -36,5 +42,7 @@ private:
     std::vector<EventLoop*> loops_;  // 存储所有子线程的 EventLoop (即 epoll 树)
 
 };
+
+} // namespace reactor::net
 
 #endif  // EVENT_LOOP_THREAD_POOL_H

@@ -1,6 +1,8 @@
 #include <algorithm>
 #include "reactor/log/LogStream.h"
 
+namespace reactor::log {
+
 const char digits[] = "9876543210123456789";
 const char* zero = digits + 9;
 
@@ -65,3 +67,5 @@ LogStream& LogStream::operator<<(double v) {
     }
     return *this;
 }
+
+} // namespace reactor::log

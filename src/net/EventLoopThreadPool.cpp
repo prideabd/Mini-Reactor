@@ -2,6 +2,8 @@
 #include "reactor/net/EventLoop.h"
 #include "reactor/log/Logger.h"
 
+namespace reactor::net {
+
 EventLoopThreadPool::EventLoopThreadPool(EventLoop* main_loop, size_t thread_count)
     : main_loop_(main_loop),
       thread_count_(thread_count),
@@ -95,3 +97,5 @@ EventLoop* EventLoopThreadPool::GetNextLoop() {
     }
     return loop;
 }
+
+} // namespace reactor::net

@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <sys/uio.h>
 #include "reactor/net/Buffer.h"
+namespace reactor::net {
 
 ssize_t Buffer::ReadFd(int fd, int* saved_errno) {
     char extra_buf[65536]; // 64KB临时缓冲区
@@ -33,3 +34,10 @@ ssize_t Buffer::ReadFd(int fd, int* saved_errno) {
     }
     return n;
 }
+
+const char* Buffer::FindCRLF() const {
+    const char* crlf = std::search(Peek(), BeginWrite(), "\r\n", BeginWrite());
+    return crlf == BeginWrite(
+}
+
+} // namespace reactor::net

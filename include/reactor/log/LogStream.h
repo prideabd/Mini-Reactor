@@ -1,6 +1,12 @@
+/**
+ * @file LogStream.h
+ * @brief 日志流实现，提供类似 std::cout 的流式调用接口，并将数据高效地格式化到内存缓冲区。
+ */
 #pragma once
 #include <cstring>
 #include <string>
+
+namespace reactor::log {
 
 // 日志流缓冲区
 const int kSmallBuffer = 4000;        // 4KB : 格式化每条日志行的临时小 Buffer
@@ -83,3 +89,5 @@ private:
     template<typename T> void FormatInteger(T);
     Buffer buffer_;
 };
+
+} // namespace reactor::log

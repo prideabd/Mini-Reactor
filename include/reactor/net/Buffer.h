@@ -4,6 +4,9 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <assert.h>
+
+namespace reactor::net {
 
 // 缓冲区
 class Buffer {
@@ -32,6 +35,10 @@ public:
     const char* Peek() const {
         return Begin() + read_index_;
     }
+    // 写游标起始
+    char* BeginWrite() {return Begin() + write_index_;}
+    const char* BeginWrite() const { return Begin() + write_index_; }
+    
     // 读取了 len 字节数据后，读游标右移
     void Retrieve(size_t len) {
         if (len < ReadableBytes()) {
@@ -59,14 +66,23 @@ public:
     // 无阻塞读取套接口
     ssize_t ReadFd(int fd, int* saved_errno);
 
+    // 暴露给 HTTP 业务层的搜索 "\r\n" 函数
+    const char* FindCRLF() const {
+        const char* crlf = std::search(Peek(), BeginWrite(), "\r\n", "\r\n" + 2);
+        return crlf == BeginWrite() ? nullptr : crlf;
+    }
+    // 暴露给 HTTP 业务层的读游标右移函数
+    void RetrieveUntil(const char* end) {
+        assert(Peek() <= end);
+        assert(end <= BeginWrite());
+        Retrieve(end - Peek());
+    }
+
+
 private:
     // 缓冲区起始
     char* Begin() { return &*buffer_.begin(); }
     const char* Begin() const { return &*buffer_.begin(); }
-
-    // 写游标起始
-    char* BeginWrite() {return Begin() + write_index_;}
-    const char* BeginWrite() const { return Begin() + write_index_; }
 
     // 确保空间有足够空间存储 len 字节
     void EnsureWritableBytes(size_t len) {
@@ -94,5 +110,7 @@ private:
 
 
 };
+
+} // namespace reactor::net
 
 #endif // BUFFER_H

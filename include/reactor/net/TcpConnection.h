@@ -1,10 +1,16 @@
 #ifndef TCP_CONNECTION_H
 #define TCP_CONNECTION_H
 
+/**
+ * @file TcpConnection.h
+ * @brief TcpConnection 类，表示一个已建立的 TCP 连接，负责数据的读写和状态管理。
+ */
 #include <memory>
 #include <string>
 #include <functional>
-#include "Buffer.h"
+#include "reactor/net/Buffer.h"
+
+namespace reactor::net {
 
 class EventLoop;
 class Channel;
@@ -55,5 +61,7 @@ private:
     MessageCallback message_callback_;
     CloseCallback close_callback_;
 };
+
+} // namespace reactor::net
 
 #endif // TCP_CONNECTION_H

@@ -5,6 +5,7 @@
 #include <string>
 #include "reactor/net/EventLoop.h"
 #include "reactor/net/TcpServer.h"
+#include "reactor/net/TcpConnection.h"
 #include "reactor/log/Logger.h"
 #include "reactor/log/AsyncLogging.h"
 
@@ -33,6 +34,29 @@ void IgnoreSigPipe() {
     }
 }
 
+void OnHttpMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* input_buf) {
+    // 1. 打印日志证明底盘在微秒级拆包
+    LOG_INFO << "📩 [HTTP 业务层]: 收到客户端原始数据，大小: " << input_buf->ReadableBytes() << " 字节";
+    
+    // 2. 冒烟测试：先不解析 HTTP 请求体，直接全盘消费 Input Buffer，防止 ET 模式重复触发
+    input_buf->RetrieveAll();
+
+    // 3. 构造一串标准、纯文本、硬编码的 HTTP 响应报文
+    // 严格遵循 HTTP 协议，头部和正文之间必须有一个【\r\n\r\n】空行分割线！
+    std::string http_response = 
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Keep-Alive\r\n"          // 压测长连接
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 18\r\n"              // 身体部分的精准字节数
+        "\r\n"                                // 👈 致命的空行！
+        "Hello Mini-Reactor";                 // 身体 (Body)
+
+    // 4. 将数据灌入 Output Buffer，注册可写事件发送
+    conn->Send(http_response);
+    
+    LOG_INFO << "🚀 [HTTP 业务层]: 成功将短路响应推入 Output Buffer，等待发送...";
+}
+
 int main() {
     LOG_INFO << "=========================================================";
     LOG_INFO << "🎮 [系统初始化]: 开启工业级 Multi-Reactor 多反应堆网络服务...";
@@ -56,6 +80,9 @@ int main() {
         EventLoop main_loop;
         // 实例化高性能总服务器类 (监听 8888 端口, 3个 Sub-Reactor 子线程)
         TcpServer server(&main_loop, 8888, 3);
+
+        server.setMessageCallback(OnHttpMessage);
+
         // 启动服务器
         server.Start();
 

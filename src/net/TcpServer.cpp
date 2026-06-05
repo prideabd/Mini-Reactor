@@ -8,6 +8,8 @@
 #include "reactor/net/TcpConnection.h"
 #include "reactor/log/Logger.h"
 
+namespace reactor::net {
+
 TcpServer::TcpServer(EventLoop* main_loop, int port, size_t thread_count)
     : main_loop_(main_loop)
 {
@@ -57,31 +59,35 @@ void TcpServer::NewConnection(int conn_fd) {
 
 // 信息处理函数
 void TcpServer::OnMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* buf) {
-    while (buf->ReadableBytes() > 0) {
-        const char* peek_pos = buf->Peek();
-        // 扫描是否有回车 '\n'
-        const char* crlf = std::find(peek_pos, peek_pos + buf->ReadableBytes(), '\n');
-        if (crlf == peek_pos + buf->ReadableBytes()) {
-            LOG_WARN << "⚠️ [TcpServer 业务层]: 收到残缺业务帧，挂起留存。";
-            break;
-        }
-        size_t package_len = crlf - peek_pos + 1;
-        std::string single_msg(peek_pos, package_len - 1); // 剥离掉 \n
-        buf->Retrieve(package_len); // 确认消费
+    // while (buf->ReadableBytes() > 0) {
+    //     const char* peek_pos = buf->Peek();
+    //     // 扫描是否有回车 '\n'
+    //     const char* crlf = std::find(peek_pos, peek_pos + buf->ReadableBytes(), '\n');
+    //     if (crlf == peek_pos + buf->ReadableBytes()) {
+    //         LOG_WARN << "⚠️ [TcpServer 业务层]: 收到残缺业务帧，挂起留存。";
+    //         break;
+    //     }
+    //     size_t package_len = crlf - peek_pos + 1;
+    //     std::string single_msg(peek_pos, package_len - 1); // 剥离掉 \n
+    //     buf->Retrieve(package_len); // 确认消费
 
-        if (single_msg.empty()) {
-            continue;
-        }
+    //     if (single_msg.empty()) {
+    //         continue;
+    //     }
 
-        LOG_INFO << "📩 [TcpServer 业务层]: 成功从 FD [" << conn->GetFd() << "] 拆出包: " << single_msg;
+    //     LOG_INFO << "📩 [TcpServer 业务层]: 成功从 FD [" << conn->GetFd() << "] 拆出包: " << single_msg;
 
-        // 响应回显
-        std::string reply = "【解耦满血版 TcpConnection】回显: " + single_msg;
-        conn->Send(reply);
-    }
-    // if (message_callback_) {
-    //     message_callback_(conn, buf);
+    //     // 响应回显
+    //     std::string reply = "【解耦满血版 TcpConnection】回显: " + single_msg;
+    //     conn->Send(reply);
     // }
+    if (message_callback_) {
+        message_callback_(conn, buf);
+    } else {
+        // 兜底保护：如果没有挂载任何应用层协议，清空缓冲区防止低层 ET 模式死锁
+        LOG_WARN << "⚠️ [TcpServer]: 收到数据，但未注册任何应用层 MessageCallback！";
+        buf->RetrieveAll();
+    }
 }
 
 // 清理下线连接：利用双重 QueueInLoop 保证无锁化跨线程生命周期延续
@@ -97,3 +103,5 @@ void TcpServer::RemoveConnection(const std::shared_ptr<TcpConnection>& conn) {
         });
     });
 }
+
+} // namespace reactor::net

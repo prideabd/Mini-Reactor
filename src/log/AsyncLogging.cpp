@@ -2,6 +2,8 @@
 #include <chrono>
 #include "reactor/log/AsyncLogging.h"
 
+namespace reactor::log {
+
 AsyncLogging::AsyncLogging(const std::string& basename, int flushInternal)
     : flushInterval_(flushInternal),
       running_(false),
@@ -114,3 +116,5 @@ void AsyncLogging::ThreadFunc() {
     ::fflush(fp);
     ::fclose(fp);
 }
+
+} // namespace reactor::log

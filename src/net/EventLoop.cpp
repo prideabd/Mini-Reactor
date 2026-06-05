@@ -8,6 +8,8 @@
 #include "reactor/net/Channel.h"
 #include "reactor/log/Logger.h"
 
+namespace reactor::net {
+
 static constexpr int kInitEventListSize = 16;
 
 EventLoop::EventLoop()
@@ -192,3 +194,5 @@ void EventLoop::HandleRead() {
     // ====================================================
     LOG_DEBUG << "Loop 成功被跨线程【唤醒】，正在处理队列任务...";
 }
+
+} // namespace reactor::net

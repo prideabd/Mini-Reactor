@@ -7,6 +7,8 @@
 #include "reactor/net/Acceptor.h"
 #include "reactor/log/Logger.h"
 
+namespace reactor::net {
+
 Acceptor::Acceptor(EventLoop* loop, int port)
     : loop_(loop), listen_fd_(-1)
 {
@@ -85,3 +87,5 @@ void Acceptor::HandleRead() {
         }
     }
 }
+
+} // namespace reactor::net

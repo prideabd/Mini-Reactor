@@ -1,11 +1,17 @@
 #ifndef EVENT_LOOP_H
 #define EVENT_LOOP
 
+/**
+ * @file EventLoop.h
+ * @brief EventLoop 类，Reactor 模式的核心，每个线程一个 EventLoop，负责事件循环和事件分发。
+ */
 #include <sys/epoll.h>
 #include <vector>
 #include <functional>
 #include <pthread.h>
 #include <memory>
+
+namespace reactor::net {
 
 class Channel; // 前置声明
 class EventLoop {
@@ -37,5 +43,7 @@ private:
     std::vector<Functor> pending_functors_;
     pthread_mutex_t mutex_;
 };
+
+} // namespace reactor::net
 
 #endif // EVENT_LOOP_H

@@ -1,5 +1,11 @@
+/**
+ * @file Logger.h
+ * @brief 日志记录器前端，定义日志级别、格式化逻辑以及提供给用户使用的宏接口。
+ */
 #pragma once
 #include "LogStream.h"
+
+namespace reactor::log {
 
 class Logger {
 public:
@@ -38,8 +44,10 @@ private:
     Impl impl_;
 };
 
-#define LOG_DEBUG Logger(__FILE__, __LINE__, Logger::DEBUG).Stream()
-#define LOG_INFO Logger(__FILE__, __LINE__, Logger::INFO).Stream()
-#define LOG_WARN Logger(__FILE__, __LINE__, Logger::WARN).Stream()
-#define LOG_ERROR Logger(__FILE__, __LINE__, Logger::ERROR).Stream()
-#define LOG_FATAL Logger(__FILE__, __LINE__, Logger::FATAL).Stream()
+} // namespace reactor::log
+
+#define LOG_DEBUG reactor::log::Logger(__FILE__, __LINE__, reactor::log::Logger::DEBUG).Stream()
+#define LOG_INFO  reactor::log::Logger(__FILE__, __LINE__, reactor::log::Logger::INFO).Stream()
+#define LOG_WARN  reactor::log::Logger(__FILE__, __LINE__, reactor::log::Logger::WARN).Stream()
+#define LOG_ERROR reactor::log::Logger(__FILE__, __LINE__, reactor::log::Logger::ERROR).Stream()
+#define LOG_FATAL reactor::log::Logger(__FILE__, __LINE__, reactor::log::Logger::FATAL).Stream()

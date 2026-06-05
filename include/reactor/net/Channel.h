@@ -1,8 +1,14 @@
 #ifndef CHANNEL_H
 #define CHANNEL_H
 
+/**
+ * @file Channel.h
+ * @brief Channel 类，封装文件描述符及其在 EventLoop 中关注的事件和对应的回调函数。
+ */
 #include <sys/epoll.h>
 #include <functional>
+
+namespace reactor::net {
 
 // 前置声明 EventLoop 类
 class EventLoop;
@@ -67,5 +73,7 @@ private:
     EventCallback close_callback_;
     EventCallback error_callback_;
 };
+
+} // namespace reactor::net
 
 #endif // CHANNEL_H

@@ -5,6 +5,8 @@
 
 #include "reactor/log/Logger.h"
 
+namespace reactor::log {
+
 // 默认输出函数：向标准输出打印
 void DefaultOutput(const char* msg, int len) {
     fwrite(msg, 1, len, stdout);
@@ -78,3 +80,5 @@ Logger::~Logger() {
         abort(); // FATAL 级别直接终止程序
     }
 }
+
+} // namespace reactor::log

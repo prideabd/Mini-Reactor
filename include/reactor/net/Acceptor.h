@@ -1,8 +1,14 @@
 #ifndef ACCEPTOR_H
 #define ACCEPTOR_H
 
+/**
+ * @file Acceptor.h
+ * @brief Acceptor 类，负责监听新的 TCP 连接请求，并将其分发给 TcpServer 处理。
+ */
 #include <functional>
 #include <memory>
+
+namespace reactor::net {
 
 class EventLoop;
 class Channel;
@@ -28,5 +34,7 @@ private:
     NewConnectionCallback new_connection_callback_;
     std::unique_ptr<Channel> accept_channel_; // listen_fd 专属 channel
 };
+
+} // namespace reactor::net
 
 #endif // ACCEPTOR_H

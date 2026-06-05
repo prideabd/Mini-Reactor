@@ -1,6 +1,8 @@
 #include "reactor/net/Channel.h"
 #include "reactor/net/EventLoop.h"
 
+namespace reactor::net {
+
 Channel::Channel(EventLoop* loop, int fd)
     : loop_(loop),
       fd_(fd),
@@ -74,3 +76,4 @@ void Channel::Update() {
     loop_->UpdateChannel(this);
 }
 
+} // namespace reactor::net

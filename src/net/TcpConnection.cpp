@@ -5,6 +5,8 @@
 #include "reactor/net/TcpConnection.h"
 #include "reactor/log/Logger.h"
 
+namespace reactor::net {
+
 TcpConnection::TcpConnection(EventLoop* loop, int conn_fd)
     : loop_(loop),
       conn_fd_(conn_fd),
@@ -134,3 +136,5 @@ void TcpConnection::Send(const std::string& msg) {
         }
     }
 }
+
+} // namespace reactor::net
