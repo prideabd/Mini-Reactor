@@ -4,7 +4,6 @@
 #include <vector>
 #include <string>
 #include <algorithm>
-#include <assert.h>
 
 namespace reactor::net {
 
@@ -71,13 +70,9 @@ public:
         const char* crlf = std::search(Peek(), BeginWrite(), "\r\n", "\r\n" + 2);
         return crlf == BeginWrite() ? nullptr : crlf;
     }
-    // 暴露给 HTTP 业务层的读游标右移函数
-    void RetrieveUntil(const char* end) {
-        assert(Peek() <= end);
-        assert(end <= BeginWrite());
-        Retrieve(end - Peek());
-    }
-
+    // 暴露给 HTTP 业务层
+    // 推进读游标，直到指定的物理地址 end 处
+    void RetrieveUntil(const char* end) {};
 
 private:
     // 缓冲区起始

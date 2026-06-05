@@ -1,6 +1,7 @@
 #include <cerrno>
 #include <unistd.h>
 #include <sys/uio.h>
+#include <assert.h>
 #include "reactor/net/Buffer.h"
 namespace reactor::net {
 
@@ -35,9 +36,11 @@ ssize_t Buffer::ReadFd(int fd, int* saved_errno) {
     return n;
 }
 
-const char* Buffer::FindCRLF() const {
-    const char* crlf = std::search(Peek(), BeginWrite(), "\r\n", BeginWrite());
-    return crlf == BeginWrite(
+// 推进读游标，直到指定的物理地址 end 处
+void Buffer::RetrieveUntil(const char* end) {
+    assert(Peek() <= end);
+    assert(end <= BeginWrite());
+    Retrieve(end - Peek());
 }
 
 } // namespace reactor::net
