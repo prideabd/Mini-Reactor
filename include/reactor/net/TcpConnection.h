@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <functional>
+#include <any>
 #include "reactor/net/Buffer.h"
 
 namespace reactor::net {
@@ -40,11 +41,21 @@ public:
     // 连接解体时的资源销毁
     void ConnectionDestroyed();
 
+    // 开放上下文万能接口，允许上层应用协议(HTTP)挂载任何状态机
+    void SetContext(const std::any& context) { context_ = context; }
+    const std::any& GetContext() const { return context_; }
+    std::any* GetMutableContext() { return &context_; }
+    bool HasContext() const { return context_.has_value(); }
+
+    // 提供给上层协议网关主动关闭函数
+    void Shutdown();
+
     // 设置回调函数
     void SetMessageCallback(MessageCallback cb) { message_callback_ = std::move(cb); }
     void SetCloseCallback(CloseCallback cb) { close_callback_ = std::move(cb); }
 
 private:
+    // 提供给内核底层
     // 内核 -> channel(获取 fd) -> TcpConnection(获取 input_buffer_) -> TcpServer
     void HandleRead();  // 给 channel 的底层读驱动
     void HandleWrite(); // 底层驱动写：output_buffer_ -> 内核
@@ -53,6 +64,7 @@ private:
     StateE state_;
     EventLoop* loop_;
     int conn_fd_;
+    std::any context_;
 
     std::unique_ptr<Channel> channel_;
     Buffer input_buffer_;

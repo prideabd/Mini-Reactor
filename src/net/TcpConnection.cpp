@@ -1,5 +1,7 @@
 #include <cerrno>
 #include <unistd.h>
+#include <sys/socket.h>
+
 #include "reactor/net/Channel.h"
 #include "reactor/net/EventLoop.h"
 #include "reactor/net/TcpConnection.h"
@@ -35,6 +37,24 @@ void TcpConnection::ConnectionDestroyed() {
     state_ = kDisconnected;
     channel_->Remove(); // 从红黑树上移除
     ::close(conn_fd_);  // 物理断开套接字描述符
+}
+
+/**
+ * @brief 供上层协议网关或业务层主动、优雅地断开连接
+ * @note  通过高内聚 Lambda 与所属子线程进行安全解耦
+ */
+void TcpConnection::Shutdown() {
+    if (state_ == kConnected) {
+        state_ = kDisconnecting;
+        loop_->RunInLoop([this, guard = shared_from_this()] () {
+            if (!channel_->IsWriting()) {
+                if (::shutdown(conn_fd_, SHUT_WR) < 0) {
+                    LOG_ERROR << "TcpConnection::Shutdown 跨线程半关闭写端失败, FD: " 
+                              << conn_fd_ << " errno: " << errno;
+                }
+            }
+        });
+    }
 }
 
 // 📥 底层读驱动
@@ -85,6 +105,12 @@ void TcpConnection::HandleWrite() {
             if (output_buffer_.ReadableBytes() == 0) {
                 // 读完了，注销写监听事件
                 channel_->DisableWriting();
+
+                // 如果发现当前状态是 kDisconnecting（说明业务之前申请过 Shutdown，但当时因为有积压被卡住了）
+                // 既然现在已经发完了，立刻在 I/O 线程就地执行系统调用，关闭写端，安全降落！
+                if (state_ == kDisconnecting) {
+                    ::shutdown(conn_fd_, SHUT_WR);
+                }
             }
         }
     }

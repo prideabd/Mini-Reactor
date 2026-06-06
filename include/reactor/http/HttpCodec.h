@@ -8,7 +8,7 @@
 
 #include <functional>
 #include <memory>
-#include "reactor/net/http/HttpContext.h"
+#include "reactor/http/HttpContext.h"
 
 
 // 向前声明传输层的 Buffer，避免头文件相互包含的强耦合
@@ -21,12 +21,26 @@ namespace reactor::http {
 
 class HttpCodec {
 public:
+    using TcpConnectionPtr = std::shared_ptr<reactor::net::TcpConnection>;
+    using HttpCallback = std::function<void(const TcpConnectionPtr&, const HttpRequest&)>;
+
+    // 保留一个默认构造函数
+    HttpCodec() = default;
+    
+    explicit HttpCodec(const HttpCallback& cb) : http_callback_(cb) {}
+
     // 当 TcpServer 收到消息时，调用此接口进行解析
     // 解析成功后，会通过回调函数将结构化数据传给 HttpServer
-    // void onMessage(const std::shared_ptr<TcpConnection>& conn, Buffer* buf);
+    void OnMessage(const TcpConnectionPtr& conn, reactor::net::Buffer* buf);
+
+    // 新增一个设置/更换回调的注册接口
+    void SetHttpCallback(const HttpCallback& cb) {
+        http_callback_ = cb;
+    }
 
 private:
-    // HttpContext context_; // 每个连接应当对应一个解析上下文
+    HttpCallback http_callback_;
+    // HttpContext http_context_;
 };
 
 } // namespace reactor::http

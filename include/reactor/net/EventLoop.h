@@ -10,6 +10,7 @@
 #include <functional>
 #include <pthread.h>
 #include <memory>
+#include <thread>
 
 namespace reactor::net {
 
@@ -28,8 +29,14 @@ public:
     void UpdateChannel(Channel* channel);
     void RemoveChannel(Channel* channel);
 
-    // 允许子线程安全向主线程 Loop 线程提供任务
+    // 智能化调度接口。在专属线程内则就地同步运行，否则降级投递异步排队
+    void RunInLoop(Functor cb);
+
+    // 允许任意外部线程（如主线程、业务线程池）向当前 Loop 线程无条件投递异步任务
     void QueueInLoop(Functor cb);
+
+    // 高频盘查内联函数。判断发起调用的线程，是否就是当前 Loop 专属绑定的线程
+    bool IsInLoopThread() const { return thread_id_ == std::this_thread::get_id(); }
 
 private:
     void HandleRead();       // 处理 eventfd 的可读事件
@@ -42,6 +49,7 @@ private:
     std::unique_ptr<Channel> wakeup_channel_;
     std::vector<Functor> pending_functors_;
     pthread_mutex_t mutex_;
+    const std::thread::id thread_id_;
 };
 
 } // namespace reactor::net

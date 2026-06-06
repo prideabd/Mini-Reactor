@@ -16,7 +16,8 @@ EventLoop::EventLoop()
     : epoll_fd_(-1),
       wakeup_fd_(-1),
       quit_(false),
-      events_(kInitEventListSize) 
+      events_(kInitEventListSize),
+      thread_id_(std::this_thread::get_id())
 {
     pthread_mutex_init(&mutex_, nullptr); // 初始化互斥锁
     // 1. 创建 epoll实例
@@ -94,6 +95,17 @@ void EventLoop::Loop() {
         if (static_cast<size_t>(nfds) == events_.size()) {
             events_.resize(events_.size() * 2);
         }
+    }
+}
+
+void EventLoop::RunInLoop(Functor cb) {
+    if (IsInLoopThread()) {
+        // 情况 A：发现就是本尊线程调用的，拒绝一切进队、排队、拿锁，直接“就地同步执行”！
+        // 性能开销为 0，极大提高了单线程内的执行速度
+        cb();
+    } else {
+        // 情况 B：发现是来自外部异界线程的跨越，乖乖送去冷宫任务队列排队安全消化
+        QueueInLoop(std::move(cb));
     }
 }
 

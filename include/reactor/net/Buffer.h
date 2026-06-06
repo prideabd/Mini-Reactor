@@ -72,7 +72,7 @@ public:
     }
     // 暴露给 HTTP 业务层
     // 推进读游标，直到指定的物理地址 end 处
-    void RetrieveUntil(const char* end) {};
+    void RetrieveUntil(const char* end);
 
 private:
     // 缓冲区起始
