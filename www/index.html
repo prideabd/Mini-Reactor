@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>⚡ Mini-Reactor 控制中心 ⚡</title>
+    <style>
+        body { background-color: #0f0f14; color: #00ff66; font-family: 'Courier New', monospace; padding: 40px; }
+        .box { border: 2px solid #00ff66; padding: 25px; border-radius: 8px; box-shadow: 0 0 25px rgba(0,255,102,0.15); max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; font-size: 28px; text-shadow: 0 0 10px rgba(0,255,102,0.5); }
+        .grid { display: flex; justify-content: space-between; margin: 30px 0; }
+        .card { background: #16161f; border: 1px solid #333; padding: 20px; width: 45%; text-align: center; border-radius: 4px; }
+        .value { font-size: 42px; font-weight: bold; color: #ffffff; margin-top: 10px; }
+        .badge { background: #00ff66; color: #000; padding: 4px 8px; font-weight: bold; font-size: 14px; border-radius: 3px; }
+        /* 留言板样式 */
+        .form-group { margin: 15px 0; }
+        input, textarea { background: #16161f; border: 1px solid #00ff66; color: #fff; padding: 10px; width: 97%; font-family: monospace; border-radius: 4px; }
+        button { background: #00ff66; color: #000; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; font-family: monospace; font-size: 16px; width: 100%; border-radius: 4px; }
+        button:hover { background: #fff; }
+        .comment-list { background: #16161f; border: 1px dashed #333; padding: 15px; margin-top: 15px; max-height: 200px; overflow-y: auto; }
+        .comment-item { border-bottom: 1px solid #222; padding: 8px 0; font-size: 14px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>🚀 MINI-REACTOR CORE ENGINE PANEL</h1>
+        <p align="center">引擎运行状态: <span class="badge" id="status-badge">INITIALIZING...</span></p>
+
+        <div class="grid">
+            <div class="card">
+                <div>🎯 累计运行秒数 (Uptime)</div>
+                <div class="value" id="uptime-val">0s</div>
+            </div>
+            <div class="card">
+                <div>🌍 内核驱动节点 (Engine)</div>
+                <div class="value" style="font-size: 24px; line-height: 42px;" id="engine-val">-</div>
+            </div>
+        </div>
+
+        <h3 style="border-bottom: 1px dashed #333; padding-bottom: 10px;">🛡️ 架构并网详情</h3>
+        <p>✦ I/O 驱动核心: <code>Linux Epoll (Edge-Triggered)</code></p>
+        <p>✦ 分发拓扑: <code>1 Main-Reactor + 3 Sub-Reactors (线程池无锁通知)</code></p>
+        <div class="form-group">
+            <input type="text" id="nickname" placeholder="输入你的极客昵称 (Nickname)">
+        </div>
+        <div class="form-group">
+            <textarea id="content" rows="2" placeholder="留下你对这台 C++ Reactor 引擎的评价..."></textarea>
+        </div>
+        <button onclick="submitComment()">🚀 发射 POST 请求 (Submit)</button>
+
+        <h4>历史留言列表：</h4>
+        <div class="comment-list" id="comment-container">加载中...</div>
+    </div>
+
+    <script>
+        // 定时器 A：每秒获取信息
+        function refreshMonitor() {
+            fetch('/api/monitor')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('status-badge').innerText = data.status;
+                    document.getElementById('uptime-val').innerText = data.uptime_seconds + 's';
+                    document.getElementById('engine-val').innerText = data.engine;
+                })
+                .catch(err => {
+                    document.getElementById('status-badge').innerText = 'OFFLINE';
+                    document.getElementById('status-badge').style.background = '#ff3333';
+                });
+        }
+        
+        // 页面加载后立刻开始高频心跳刷新
+        setInterval(refreshMonitor, 1000);
+        refreshMonitor();
+
+        // 异步 B : 拉取历史留言 (GET)
+        function fetchComments() {
+            fetch('/api/comment?_t=' + Date.now())
+                .then(res => res.json())
+                .then(data => {
+                    const container = document.getElementById('comment-container');
+                    if(data.length === 0) { container.innerHTML = "暂无留言，快来抢沙发！"; return; }
+                    container.innerHTML = data.map(item => `<div class="comment-item">✦ 匿名客: ${item}</div>`).join('');
+                    container.scrollTop = container.scrollHeight;
+                });
+        }
+        fetchComments();
+
+        // 异步 C：提交留言 (POST)
+        function submitComment() {
+            const nick = document.getElementById('nickname').value;
+            const text = document.getElementById('content').value;
+            if(!nick || !text) { alert('内容不能为空！'); return; }
+
+            // 物理打包成普通字符串发送
+            const payload = `${nick}: ${text}`;
+
+            fetch('/api/comment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/plain; charset=utf-8' // 明确告诉后端我们喷的是纯文本
+                },
+                body: payload
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.result === "SUCCESS" || data.status === "SUCCESS") {
+                    document.getElementById('content').value = ''; // 清空输入框
+                    setTimeout(fetchComments, 50);
+                } else {
+                    alert('后端报错: ' + data.msg);
+                }
+            }).catch(err => {
+                alert('网络发射失败，请检查 C++ 服务器状态');
+            });
+        }
+    </script>
+</body>
+</html>
