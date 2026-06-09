@@ -20,6 +20,9 @@
 
 namespace app {
 
+// 全局变量初始化，必须在.cpp中初始化
+std::atomic<uint64_t> g_global_request_count{0};
+
 // 根据文件后缀名，自动匹配 HTTP 标准媒体类型（MIME Type）
 std::string GetMimeType(const std::string& path) {
     static const std::unordered_map<std::string, std::string> mime_types = {
@@ -47,6 +50,7 @@ std::string GetMimeType(const std::string& path) {
 void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                        const reactor::http::HttpRequest& req)
 {
+    g_global_request_count.fetch_add(1, std::memory_order_relaxed);
     LOG_INFO << "💡 [HttpHandler]: 成功捕获请求！Method: " << req.method << " | Path: " << req.path;
 
     std::string body;
@@ -58,7 +62,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     // ==========================================
    
     if (req.path == "/api/monitor") {
-        content_type = "Context-Type: " + GetMimeType(".json") + "\r\n";
+        content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
 
         // 1. 计算服务器点火至今的运行时间
         static auto start_time = std::chrono::steady_clock::now();
@@ -77,6 +81,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 << "\"uptime_seconds\":" << uptime_sec << ","
                 << "\"live_connections\":" << live_connections << ","
                 << "\"sub_reactors\":" << active_threads << ","
+                << "\"total_request\":" <<g_global_request_count.load(std::memory_order_relaxed) << ","
                 << "\"engine\":\"Mini-Reactor-v2.0\""
                 << "}";
         body = json_ss.str();
@@ -132,7 +137,22 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         body = json_ss.str();
     }
     // ==========================================
-    // 分支 D：万能静态文件托管引擎（磁盘文件映射）
+    // 分支 D：压力测试高速接口
+    // ==========================================
+    else if (req.path == "/api/stress" && (req.method == "GET" || req.method.empty())) {
+        std::string response_body = "{\"status\":\"ok\",\"msg\":\"Boom! C++ Reactor Core Handled This Successfully.\"}";
+        std::string response = "HTTP/1.1 200 OK\r\n";
+        response += "Content-Type: application/json\r\n";
+        response += "Content-Length: " + std::to_string(response_body.length()) + "\r\n";
+        response += "Connection: keep-alive\r\n"; // 保持长连接，压测核心：避免频繁三次握手，专测 I/O
+        response += "Access-Control-Allow-Origin: *\r\n"; // 允许跨域（方便各种客户端轰炸）
+        response += "\r\n";
+        response += response_body;
+        conn->Send(response);
+        return;
+    }
+    // ==========================================
+    // 分支 E：万能静态文件托管引擎（磁盘文件映射）
     // ==========================================
     else {
         // 1. 定位物理文件路径，防止路径穿越攻击，默认根路由指向 index.html

@@ -36,9 +36,36 @@
             </div>
         </div>
 
-        <h3 style="border-bottom: 1px dashed #333; padding-bottom: 10px;">🛡️ 架构并网详情</h3>
-        <p>✦ I/O 驱动核心: <code>Linux Epoll (Edge-Triggered)</code></p>
-        <p>✦ 分发拓扑: <code>1 Main-Reactor + 3 Sub-Reactors (线程池无锁通知)</code></p>
+        <div class="card" style="margin-top: 20px; padding: 20px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 8px;">
+            <h3 style="color: #00ff66; margin-top: 0;">🚀 分布式多线程压力测试轰炸机</h3>
+            <p style="color: #888; font-size: 13px;">通过浏览器异步多路复用技术，向云端 C++ Reactor 引擎发起瞬时高并发撞击。</p>
+            
+            <div style="margin: 20px 0; display: flex; align-items: center; gap: 20px;">
+                <div>
+                    <label>并发线程数 (Simultaneous): </label>
+                    <input type="range" id="concurrencyRange" min="5" max="200" value="50" style="cursor: pointer;">
+                    <span id="concurrencyVal" style="color: #00ff66; font-weight: bold;">50</span>
+                </div>
+                <button id="fireBtn" style="background: #ff3333; color: white; border: none; padding: 10px 25px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: 0.3s;">
+                    🔥 开始全弹发射 (FIRE)
+                </button>
+            </div>
+
+            <div style="display: flex; gap: 40px; margin-top: 15px; background: #111; padding: 15px; border-radius: 4px;">
+                <div>
+                    <div style="font-size: 12px; color: #aaa;">实时吞吐量 (QPS)</div>
+                    <div id="qpsDisplay" style="font-size: 32px; font-weight: bold; color: #00ff66; font-family: monospace;">0</div>
+                </div>
+                <div>
+                    <div style="font-size: 12px; color: #aaa;">累计成功请求数</div>
+                    <div id="totalSuccessDisplay" style="font-size: 32px; font-weight: bold; color: #33ccff; font-family: monospace;">0</div>
+                </div>
+                <div>
+                    <div style="font-size: 12px; color: #aaa;">平均网络延迟 (Latency)</div>
+                    <div id="latencyDisplay" style="font-size: 32px; font-weight: bold; color: #ffcc00; font-family: monospace;">0ms</div>
+                </div>
+            </div>
+        </div>
         <div class="form-group">
             <input type="text" id="nickname" placeholder="输入你的极客昵称 (Nickname)">
         </div>
@@ -52,6 +79,108 @@
     </div>
 
     <script>
+        // 压测状态控制变量
+        let isBlasting = false;
+        let successCount = 0;
+        let lastSuccessCount = 0;
+        let totalLatency = 0;
+        let latencyCount = 0;
+        let concurrency = 50;
+        let activeWorkers = 0; // 计数器
+
+        // 滑块联动
+        document.getElementById('concurrencyRange').addEventListener('input', (e) => {
+            concurrency = parseInt(e.target.value);
+            document.getElementById('concurrencyVal').innerText = concurrency;
+        });
+
+        // 开火按钮控制
+        const fireBtn = document.getElementById('fireBtn');
+        fireBtn.addEventListener('click', () => {
+            if (!isBlasting) {
+                // 启动轰炸
+                isBlasting = true;
+                fireBtn.innerText = "🛑 紧急停止轰炸 (STOP)";
+                fireBtn.style.background = "#ffcc00";
+                fireBtn.style.color = "#000";
+                startStressWorkers();
+            } else {
+                // 熄火
+                isBlasting = false;
+                fireBtn.innerText = "🔥 开始全弹发射 (FIRE)";
+                fireBtn.style.background = "#ff3333";
+                fireBtn.style.color = "#fff";
+                fireBtn.disabled = true; // 暂时禁用
+            }
+        });
+
+        // 异步循环轰炸核心函数
+        async function worker() {
+            const targetUrl = window.location.origin + "/api/stress";
+            
+            while (isBlasting) {
+                const startTime = performance.now();
+                try {
+                    const res = await fetch(targetUrl, { method: 'GET', mode: 'cors' });
+                    if (res.ok) {
+                        successCount++;
+                        const endTime = performance.now();
+                        totalLatency += (endTime - startTime);
+                        latencyCount++;
+                    }
+                } catch (err) {
+                    // 压测过猛导致本地网络溢出时捕获异常，防止网页卡死
+                }
+            }
+        }
+
+        activeWorkers--;
+        // 当所有旧 worker 干净下线后，恢复按钮活力
+        if (activeWorkers === 0) {
+            fireBtn.innerText = "🔥 开始全弹发射 (FIRE)";
+            fireBtn.style.background = "#ff3333";
+            fireBtn.style.color = "#fff";
+            fireBtn.disabled = false;
+
+        }
+        // 调度启动器：根据滑块指定的并发数，并发启动对应数量的死循环协程
+        function startStressWorkers() {
+            successCount = 0;
+            lastSuccessCount = 0;
+            totalLatency = 0;
+            latencyCount = 0;
+            
+            for (let i = 0; i < concurrency; i++) {
+                worker();
+            }
+        }
+
+        // 1秒定时器：每秒清算一次战果，计算 QPS 并刷新大盘
+        setInterval(() => {
+            if (!isBlasting) {
+                document.getElementById('qpsDisplay').innerText = "0";
+                document.getElementById('latencyDisplay').innerText = "0ms";
+                return;
+            }
+            
+            // 计算当前这一秒的 QPS
+            const currentQps = successCount - lastSuccessCount;
+            lastSuccessCount = successCount;
+            
+            // 计算当前平均延迟
+            let avgLatency = 0;
+            if (latencyCount > 0) {
+                avgLatency = Math.round(totalLatency / latencyCount);
+            }
+            // 重置延迟计数器，保证延迟是实时体现的
+            totalLatency = 0;
+            latencyCount = 0;
+
+            // 物理刷新显示
+            document.getElementById('qpsDisplay').innerText = currentQps.toLocaleString();
+            document.getElementById('totalSuccessDisplay').innerText = successCount.toLocaleString();
+            document.getElementById('latencyDisplay').innerText = avgLatency + "ms";
+        }, 1000);
         // 定时器 A：每秒获取信息
         function refreshMonitor() {
             fetch('/api/monitor')

@@ -10,6 +10,7 @@
  */
 
 #include <memory>
+#include <atomic>
 
 namespace reactor::net {
     class TcpConnection;
@@ -26,6 +27,9 @@ namespace app {
  * @param conn 传输层连接强引用指针（用于最后将响应 Send 回网路）
  * @param req  协议层洗干净的结构化 HTTP 请求体对象
  */
+
+ // 申明全局变量
+ extern std::atomic<uint64_t> g_global_request_count;
 
  void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                         const reactor::http::HttpRequest& req);
