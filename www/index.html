@@ -262,7 +262,7 @@
         }
 
         // 统一并网实例化四大监控图表引擎
-        const qpsChart = createMiniChart('qpsChart', '#00ff66', 'rgba(0, 255, 103, 0.08)', 10, true);
+        const qpsChart = createMiniChart('qpsChart', '#00ff66', 'rgba(0, 255, 103, 0.08)', 200000, true);
         const cpuChart = createMiniChart('cpuChart', '#00ff66', 'rgba(0, 255, 103, 0.04)', 100);
         const memChart = createMiniChart('memChart', '#33ccff', 'rgba(51, 204, 255, 0.04)', 100);
         const ioChart  = createMiniChart('ioChart', '#ffcc00', 'rgba(255, 204, 0, 0.04)', 50);
@@ -295,8 +295,7 @@
                     latencyCount = 0;
 
                     // 2. ⚡ 模拟前端物理映射计算：随着压力膨胀，模拟服务器资源吃满
-                    // 设定 1400 QPS 为服务器的设计满载性能基准
-                    let loadRatio = Math.min(globalQps / 1400.0, 1.0);
+                    let loadRatio = Math.min(globalQps / 200000.0, 1.0);
 
                     // 设定各硬件指标受压时的目标走向
                     let targetCpu = 2.0 + loadRatio * 85.0;  // 闲置 2%，满载 87%
@@ -323,7 +322,7 @@
                     // 4. 文字看板像素级更新同步
                     document.getElementById('qpsDisplay').innerText = globalQps.toLocaleString();
                     document.getElementById('totalSuccessDisplay').innerText = currentTotal.toLocaleString();
-                    document.getElementById('latencyDisplay').innerText = isBlasting ? (avgLatency + "ms") : "0ms";
+                    document.getElementById('latencyDisplay').innerText = latencyCount > 0 ? (avgLatency + "ms") : "0.1ms";
 
                     document.getElementById('cpuDisplay').innerText = smoothedCpu.toFixed(1) + "%";
                     document.getElementById('memDisplay').innerText = smoothedMem.toFixed(1) + "%";
