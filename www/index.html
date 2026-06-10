@@ -285,7 +285,7 @@
                         isFirstHeartbeat = false;
                         return;
                     }
-                    let globalQps = isBlasting ? (currentTotal - lastTotalRequests) : 0;
+                    let globalQps = currentTotal - lastTotalRequests;
                     lastTotalRequests = currentTotal;
                     let avgLatency = 0;
                     if (latencyCount > 0) {
