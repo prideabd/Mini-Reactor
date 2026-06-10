@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <chrono>
+#include <iomanip>
 
 #include "HttpHandler.h"
 #include "reactor/net/TcpConnection.h"
