@@ -19,6 +19,7 @@
         .comment-list { background: #16161f; border: 1px dashed #333; padding: 15px; margin-top: 15px; max-height: 200px; overflow-y: auto; }
         .comment-item { border-bottom: 1px solid #222; padding: 8px 0; font-size: 14px; color: #aaa; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="box">
@@ -65,6 +66,12 @@
                     <div id="latencyDisplay" style="font-size: 32px; font-weight: bold; color: #ffcc00; font-family: monospace;">0ms</div>
                 </div>
             </div>
+            <div style="background: #16161f; border: 1px solid #00ff66; padding: 20px; margin-top: 30px; border-radius: 4px; box-shadow: 0 0 15px rgba(0,255,102,0.05);">
+                <h3 style="margin-top: 0; color: #00ff66; font-size: 16px; text-shadow: 0 0 5px rgba(0,255,102,0.3);">📈 全局实时 QPS 动力波形图</h3>
+                <div style="position: relative; height: 260px; width: 100%;">
+                    <canvas id="qpsChart"></canvas>
+                </div>
+            </div>
         </div>
         <div class="form-group">
             <input type="text" id="nickname" placeholder="输入你的极客昵称 (Nickname)">
@@ -87,6 +94,8 @@
         let latencyCount = 0;
         let concurrency = 50;
         let activeWorkers = 0; // 计数器
+        let lastTotalRequests = 0;
+        let isFirstHeartbeat = true;
 
         // 滑块联动
         document.getElementById('concurrencyRange').addEventListener('input', (e) => {
@@ -101,48 +110,54 @@
                 // 启动轰炸
                 isBlasting = true;
                 fireBtn.innerText = "🛑 紧急停止轰炸 (STOP)";
-                fireBtn.style.background = "#ffcc00";
-                fireBtn.style.color = "#000";
+                fireBtn.style.background = "#ff3333";
+                fireBtn.style.color = "#fff";
                 startStressWorkers();
             } else {
                 // 熄火
+                // 给予视觉缓冲
                 isBlasting = false;
-                fireBtn.innerText = "🔥 开始全弹发射 (FIRE)";
-                fireBtn.style.background = "#ff3333";
-                fireBtn.style.color = "#fff";
+                fireBtn.innerText = "⏳ 正在安全断开... (RESETTING)";
+                fireBtn.style.background = "#555";
+                fireBtn.style.color = "#aaa";
                 fireBtn.disabled = true; // 暂时禁用
+
+                // 1.5秒后，恢复按钮
+                setTimeout(() => {
+                    activeWorkers = 0; // 强制归0
+                    fireBtn.innerText = "🔥 开始全弹发射 (FIRE)";
+                    fireBtn.style.background = "#ff3333";
+                    fireBtn.style.color = "#fff";
+                    fireBtn.disabled = false;
+                }, 1500);
             }
         });
 
         // 异步循环轰炸核心函数
         async function worker() {
             const targetUrl = window.location.origin + "/api/stress";
+            activeWorkers++;
             
-            while (isBlasting) {
-                const startTime = performance.now();
-                try {
-                    const res = await fetch(targetUrl, { method: 'GET', mode: 'cors' });
-                    if (res.ok) {
-                        successCount++;
-                        const endTime = performance.now();
-                        totalLatency += (endTime - startTime);
-                        latencyCount++;
+            try {
+                while (isBlasting) {
+                    const startTime = performance.now();
+                    try {
+                        const res = await fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store'});
+                        if (res.ok) {
+                            successCount++;
+                            const endTime = performance.now();
+                            totalLatency += (endTime - startTime);
+                            latencyCount++;
+                        }
+                    } catch (err) {
+                        // 压测过猛导致本地网络溢出时捕获异常，防止网页卡死
                     }
-                } catch (err) {
-                    // 压测过猛导致本地网络溢出时捕获异常，防止网页卡死
                 }
+            } finally {
+                 if (activeWorkers > 0) activeWorkers--;
             }
         }
 
-        activeWorkers--;
-        // 当所有旧 worker 干净下线后，恢复按钮活力
-        if (activeWorkers === 0) {
-            fireBtn.innerText = "🔥 开始全弹发射 (FIRE)";
-            fireBtn.style.background = "#ff3333";
-            fireBtn.style.color = "#fff";
-            fireBtn.disabled = false;
-
-        }
         // 调度启动器：根据滑块指定的并发数，并发启动对应数量的死循环协程
         function startStressWorkers() {
             successCount = 0;
@@ -155,32 +170,46 @@
             }
         }
 
-        // 1秒定时器：每秒清算一次战果，计算 QPS 并刷新大盘
-        setInterval(() => {
-            if (!isBlasting) {
-                document.getElementById('qpsDisplay').innerText = "0";
-                document.getElementById('latencyDisplay').innerText = "0ms";
-                return;
-            }
-            
-            // 计算当前这一秒的 QPS
-            const currentQps = successCount - lastSuccessCount;
-            lastSuccessCount = successCount;
-            
-            // 计算当前平均延迟
-            let avgLatency = 0;
-            if (latencyCount > 0) {
-                avgLatency = Math.round(totalLatency / latencyCount);
-            }
-            // 重置延迟计数器，保证延迟是实时体现的
-            totalLatency = 0;
-            latencyCount = 0;
+        // 初始化 chart 图表（QPS）
+        const ctx = document.getElementById('qpsChart').getContext('2d');
+        const MAX_DATA_POINTS = 20;
+        const chartLabels = Array(MAX_DATA_POINTS).fill('');
+        const chartData = Array(MAX_DATA_POINTS).fill(0);
 
-            // 物理刷新显示
-            document.getElementById('qpsDisplay').innerText = currentQps.toLocaleString();
-            document.getElementById('totalSuccessDisplay').innerText = successCount.toLocaleString();
-            document.getElementById('latencyDisplay').innerText = avgLatency + "ms";
-        }, 1000);
+        const qpsChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartLabels,
+                datasets: [{
+                    label: '实时吞吐量(QPS)',
+                    data: chartData,
+                    borderColor: '#00ff66',
+                    borderWidth: 2,
+                    backgroundColor:'rgba(0, 255, 103, 0.08)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: {display: false} },
+                scales: {
+                    x: { grid: { color: '#222' }, ticks: { display: false } },
+                    y: {
+                        grid: { color: '#222' },
+                        ticks: { 
+                            color: '#00ff66', 
+                            font: { family: 'Courier New'},
+                            callback: function(value) { if (value % 1 === 0) return value; }
+                        },
+                        beginAtZero: true,
+                        suggestedMax: 10 // 当所有数据都为 0 时，Y 轴至少维持 0~10 的大厂高开阔度，绝不自适应缩放到 1！
+                    }
+                },
+            }
+        });
+    
         // 定时器 A：每秒获取信息
         function refreshMonitor() {
             fetch('/api/monitor')
@@ -189,6 +218,37 @@
                     document.getElementById('status-badge').innerText = data.status;
                     document.getElementById('uptime-val').innerText = data.uptime_seconds + 's';
                     document.getElementById('engine-val').innerText = data.engine;
+
+                    const currentTotal = data.total_request || 0;
+                    if (isFirstHeartbeat) {
+                        lastTotalRequests = currentTotal;
+                        isFirstHeartbeat = false;
+                        return;
+                    }
+                    let globalQps = isBlasting ? (currentTotal - lastTotalRequests) : 0;
+                    lastTotalRequests = currentTotal;
+                    let avgLatency = 0;
+                    if (latencyCount > 0) {
+                        avgLatency = Math.round(totalLatency / latencyCount);
+                    }
+                    totalLatency = 0;
+                    latencyCount = 0;
+
+                    
+                    document.getElementById('qpsDisplay').innerText = globalQps.toLocaleString();
+                    document.getElementById('totalSuccessDisplay').innerText = currentTotal.toLocaleString();
+                    document.getElementById('latencyDisplay').innerText = isBlasting ? (avgLatency + "ms") : "0ms";
+
+                    // 给定横纵坐标
+                    qpsChart.data.datasets[0].data.push(globalQps);
+                    qpsChart.data.labels.push(new Date().toLocaleTimeString().substr(3, 5));
+
+                    if (qpsChart.data.datasets[0].data.length > MAX_DATA_POINTS) {
+                        qpsChart.data.datasets[0].data.shift();
+                        qpsChart.data.labels.shift();
+                    }
+                    // 重新绘制图表
+                    qpsChart.update();
                 })
                 .catch(err => {
                     document.getElementById('status-badge').innerText = 'OFFLINE';
