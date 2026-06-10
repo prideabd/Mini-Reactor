@@ -57,6 +57,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     std::string body;
     std::string status_line = "HTTP/1.1 200 OK\r\n";
     std::string content_type = "text/html; charset=utf-8\r\n";
+    std::string connection_header = "Connection: keep-alive\r\n"; // 默认全局长连接复用
 
     // ==========================================
     // 分支 A：硬核后端动态核心监控 API 接口
@@ -170,16 +171,11 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     // 分支 D：压力测试高速接口
     // ==========================================
     else if (req.path == "/api/stress" && (req.method == "GET" || req.method.empty())) {
-        std::string response_body = "{\"status\":\"ok\",\"msg\":\"Boom! C++ Reactor Core Handled This Successfully.\"}";
-        std::string response = "HTTP/1.1 200 OK\r\n";
-        response += "Content-Type: application/json\r\n";
-        response += "Content-Length: " + std::to_string(response_body.length()) + "\r\n";
-        response += "Connection: keep-alive\r\n"; // 保持长连接，压测核心：避免频繁三次握手，专测 I/O
-        response += "Access-Control-Allow-Origin: *\r\n"; // 允许跨域（方便各种客户端轰炸）
-        response += "\r\n";
-        response += response_body;
-        conn->Send(response);
-        return;
+        content_type = "Content-Type: application/json\r\n";
+        // 显式注入允许跨域，方便客户端多路复用
+        content_type += "Access-Control-Allow-Origin: *\r\n"; 
+        body = "{\"status\":\"ok\",\"msg\":\"Boom! C++ Reactor Core Handled This Successfully.\"}";
+        // 删掉原本的内部独立 Send 和 return，交给末尾统一对齐组装
     }
     // ==========================================
     // 分支 E：万能静态文件托管引擎（磁盘文件映射）
@@ -219,9 +215,9 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     response_ss << status_line
                 << content_type
                 << "Content-Length: " << body.size() << "\r\n"
-                << "Connection: keep-alive\r\n"  // 支持长连接，网页加载极其顺畅
-                << "\r\n"                         // 核心空行，切分 Header 与 Body
-                << body;
+                << connection_header  // 规范注入 Keep-Alive
+                << "\r\n"             // 切分 Header 与 Body 的核心空行
+                << body << "\r\n";    // 🌟 加上标准尾部结束标记，彻底阻断 ab 提前闪退
     
     // 🌟 顺藤摸瓜，通过连接将拼装好的数据回喷给内核缓冲区
     conn->Send(response_ss.str());
