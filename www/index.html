@@ -1,306 +1,84 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <title>⚡ Mini-Reactor 控制中心 ⚡</title>
-    <style>
-        body { background-color: #0f0f14; color: #00ff66; font-family: 'Courier New', monospace; padding: 40px; }
-        .box { border: 2px solid #00ff66; padding: 25px; border-radius: 8px; box-shadow: 0 0 25px rgba(0,255,102,0.15); max-width: 800px; margin: 0 auto; }
-        h1 { text-align: center; font-size: 28px; text-shadow: 0 0 10px rgba(0,255,102,0.5); }
-        .grid { display: flex; justify-content: space-between; margin: 30px 0; }
-        .card { background: #16161f; border: 1px solid #333; padding: 20px; width: 45%; text-align: center; border-radius: 4px; }
-        .value { font-size: 42px; font-weight: bold; color: #ffffff; margin-top: 10px; }
-        .badge { background: #00ff66; color: #000; padding: 4px 8px; font-weight: bold; font-size: 14px; border-radius: 3px; }
-        /* 留言板样式 */
-        .form-group { margin: 15px 0; }
-        input, textarea { background: #16161f; border: 1px solid #00ff66; color: #fff; padding: 10px; width: 97%; font-family: monospace; border-radius: 4px; }
-        button { background: #00ff66; color: #000; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; font-family: monospace; font-size: 16px; width: 100%; border-radius: 4px; }
-        button:hover { background: #fff; }
-        .comment-list { background: #16161f; border: 1px dashed #333; padding: 15px; margin-top: 15px; max-height: 200px; overflow-y: auto; }
-        .comment-item { border-bottom: 1px solid #222; padding: 8px 0; font-size: 14px; color: #aaa; }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-</head>
-<body>
-    <div class="box">
-        <h1>🚀 MINI-REACTOR CORE ENGINE PANEL</h1>
-        <p align="center">引擎运行状态: <span class="badge" id="status-badge">INITIALIZING...</span></p>
-
-        <div class="grid">
-            <div class="card">
-                <div>🎯 累计运行秒数 (Uptime)</div>
-                <div class="value" id="uptime-val">0s</div>
-            </div>
-            <div class="card">
-                <div>🌍 内核驱动节点 (Engine)</div>
-                <div class="value" style="font-size: 24px; line-height: 42px;" id="engine-val">-</div>
-            </div>
-        </div>
-
-        <div class="card" style="margin-top: 20px; padding: 20px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 8px;">
+<div style="margin-top: 20px; padding: 20px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 8px; box-sizing: border-box;">
             <h3 style="color: #00ff66; margin-top: 0;">🚀 分布式多线程压力测试轰炸机</h3>
             <p style="color: #888; font-size: 13px;">通过浏览器异步多路复用技术，向云端 C++ Reactor 引擎发起瞬时高并发撞击。</p>
             
-            <div style="margin: 20px 0; display: flex; align-items: center; gap: 20px;">
-                <div>
-                    <label>并发线程数 (Simultaneous): </label>
-                    <input type="range" id="concurrencyRange" min="5" max="200" value="50" style="cursor: pointer;">
-                    <span id="concurrencyVal" style="color: #00ff66; font-weight: bold;">50</span>
+            <div style="margin: 20px 0; display: flex; align-items: center; gap: 20px; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label style="font-size: 14px; white-space: nowrap;">并发线程数 (Simultaneous): </label>
+                    <input type="range" id="concurrencyRange" min="5" max="200" value="50" style="cursor: pointer; width: 150px; margin: 0;">
+                    <span id="concurrencyVal" style="color: #00ff66; font-weight: bold; font-size: 16px; min-width: 30px; display: inline-block;">50</span>
                 </div>
-                <button id="fireBtn" style="background: #ff3333; color: white; border: none; padding: 10px 25px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: 0.3s;">
+                <button id="fireBtn" style="background: #ff3333; color: white; border: none; padding: 12px 25px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: 0.3s; font-family: monospace; font-size: 14px; width: auto;">
                     🔥 开始全弹发射 (FIRE)
                 </button>
             </div>
 
-            <div style="display: flex; gap: 40px; margin-top: 15px; background: #111; padding: 15px; border-radius: 4px;">
-                <div>
+            <div style="display: flex; gap: 20px; margin-top: 15px; background: #111; padding: 15px; border-radius: 4px; justify-content: space-between; border: 1px solid #222;">
+                <div style="flex: 1; text-align: center;">
                     <div style="font-size: 12px; color: #aaa;">实时吞吐量 (QPS)</div>
-                    <div id="qpsDisplay" style="font-size: 32px; font-weight: bold; color: #00ff66; font-family: monospace;">0</div>
+                    <div id="qpsDisplay" style="font-size: 32px; font-weight: bold; color: #00ff66; font-family: monospace; margin-top: 5px;">0</div>
                 </div>
-                <div>
+                <div style="border-left: 1px solid #222; height: 50px; margin-top: 5px;"></div>
+                <div style="flex: 1; text-align: center;">
                     <div style="font-size: 12px; color: #aaa;">累计成功请求数</div>
-                    <div id="totalSuccessDisplay" style="font-size: 32px; font-weight: bold; color: #33ccff; font-family: monospace;">0</div>
+                    <div id="totalSuccessDisplay" style="font-size: 32px; font-weight: bold; color: #33ccff; font-family: monospace; margin-top: 5px;">0</div>
                 </div>
-                <div>
+                <div style="border-left: 1px solid #222; height: 50px; margin-top: 5px;"></div>
+                <div style="flex: 1; text-align: center;">
                     <div style="font-size: 12px; color: #aaa;">平均网络延迟 (Latency)</div>
-                    <div id="latencyDisplay" style="font-size: 32px; font-weight: bold; color: #ffcc00; font-family: monospace;">0ms</div>
+                    <div id="latencyDisplay" style="font-size: 32px; font-weight: bold; color: #ffcc00; font-family: monospace; margin-top: 5px;">0ms</div>
                 </div>
             </div>
-            <div style="background: #16161f; border: 1px solid #00ff66; padding: 20px; margin-top: 30px; border-radius: 4px; box-shadow: 0 0 15px rgba(0,255,102,0.05);">
+
+            <div style="display: flex; margin-top: 20px; justify-content: space-between; box-sizing: border-box;">
+                <div style="background: #111; border: 1px solid #333; padding: 15px; width: 31%; border-radius: 4px; box-sizing: border-box;">
+                    <div style="font-size: 12px; color: #aaa; display: flex; justify-content: space-between; align-items: center;">
+                        <span>💻 CPU 使用率</span>
+                        <span id="cpuDisplay" style="color: #00ff66; font-weight: bold;">0.0%</span>
+                    </div>
+                    <div style="height: 110px; width: 100%; margin-top: 12px; position: relative;">
+                        <canvas id="cpuChart"></canvas>
+                    </div>
+                </div>
+                <div style="background: #111; border: 1px solid #333; padding: 15px; width: 31%; border-radius: 4px; box-sizing: border-box;">
+                    <div style="font-size: 12px; color: #aaa; display: flex; justify-content: space-between; align-items: center;">
+                        <span>🧠 内存剩余 (Avail)</span>
+                        <span id="memDisplay" style="color: #33ccff; font-weight: bold;">0.0%</span>
+                    </div>
+                    <div style="height: 110px; width: 100%; margin-top: 12px; position: relative;">
+                        <canvas id="memChart"></canvas>
+                    </div>
+                </div>
+                <div style="background: #111; border: 1px solid #333; padding: 15px; width: 31%; border-radius: 4px; box-sizing: border-box;">
+                    <div style="font-size: 12px; color: #aaa; display: flex; justify-content: space-between; align-items: center;">
+                        <span>💾 磁盘 I/O 吞吐</span>
+                        <span id="ioDisplay" style="color: #ffcc00; font-weight: bold;">0.0 MB/s</span>
+                    </div>
+                    <div style="height: 110px; width: 100%; margin-top: 12px; position: relative;">
+                        <canvas id="ioChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div style="background: #16161f; border: 1px solid #00ff66; padding: 20px; margin-top: 20px; border-radius: 4px; box-shadow: 0 0 15px rgba(0,255,102,0.05); box-sizing: border-box;">
                 <h3 style="margin-top: 0; color: #00ff66; font-size: 16px; text-shadow: 0 0 5px rgba(0,255,102,0.3);">📈 全局实时 QPS 动力波形图</h3>
-                <div style="position: relative; height: 260px; width: 100%;">
+                <div style="position: relative; height: 240px; width: 100%;">
                     <canvas id="qpsChart"></canvas>
                 </div>
             </div>
         </div>
-        <div class="form-group">
-            <input type="text" id="nickname" placeholder="输入你的极客昵称 (Nickname)">
-        </div>
-        <div class="form-group">
-            <textarea id="content" rows="2" placeholder="留下你对这台 C++ Reactor 引擎的评价..."></textarea>
-        </div>
-        <button onclick="submitComment()">🚀 发射 POST 请求 (Submit)</button>
 
-        <h4>历史留言列表：</h4>
-        <div class="comment-list" id="comment-container">加载中...</div>
+        <div class="form-panel">
+            <h3 style="color: #00ff66; margin-top: 0; font-size: 16px;">💬 引擎测试留言反馈区</h3>
+            <div class="form-group">
+                <input type="text" id="nickname" placeholder="输入你的极客昵称 (Nickname)">
+            </div>
+            <div class="form-group">
+                <textarea id="content" rows="2" placeholder="留下你对这台 C++ Reactor 引擎的评价..."></textarea>
+            </div>
+            <button class="submit-btn" onclick="submitComment()">🚀 发射 POST 请求 (Submit)</button>
+
+            <h4 style="color: #aaa; margin-bottom: 10px; margin-top: 20px;">历史留言列表：</h4>
+            <div class="comment-list" id="comment-container">加载中...</div>
+        </div>
     </div>
-
-    <script>
-        // 压测状态控制变量
-        let isBlasting = false;
-        let successCount = 0;
-        let lastSuccessCount = 0;
-        let totalLatency = 0;
-        let latencyCount = 0;
-        let concurrency = 50;
-        let activeWorkers = 0; // 计数器
-        let lastTotalRequests = 0;
-        let isFirstHeartbeat = true;
-
-        // 滑块联动
-        document.getElementById('concurrencyRange').addEventListener('input', (e) => {
-            concurrency = parseInt(e.target.value);
-            document.getElementById('concurrencyVal').innerText = concurrency;
-        });
-
-        // 开火按钮控制
-        const fireBtn = document.getElementById('fireBtn');
-        fireBtn.addEventListener('click', () => {
-            if (!isBlasting) {
-                // 启动轰炸
-                isBlasting = true;
-                fireBtn.innerText = "🛑 紧急停止轰炸 (STOP)";
-                fireBtn.style.background = "#ff3333";
-                fireBtn.style.color = "#fff";
-                startStressWorkers();
-            } else {
-                // 熄火
-                // 给予视觉缓冲
-                isBlasting = false;
-                fireBtn.innerText = "⏳ 正在安全断开... (RESETTING)";
-                fireBtn.style.background = "#555";
-                fireBtn.style.color = "#aaa";
-                fireBtn.disabled = true; // 暂时禁用
-
-                // 1.5秒后，恢复按钮
-                setTimeout(() => {
-                    activeWorkers = 0; // 强制归0
-                    fireBtn.innerText = "🔥 开始全弹发射 (FIRE)";
-                    fireBtn.style.background = "#ff3333";
-                    fireBtn.style.color = "#fff";
-                    fireBtn.disabled = false;
-                }, 1500);
-            }
-        });
-
-        // 异步循环轰炸核心函数
-        async function worker() {
-            const targetUrl = window.location.origin + "/api/stress";
-            activeWorkers++;
-            
-            try {
-                while (isBlasting) {
-                    const startTime = performance.now();
-                    try {
-                        const res = await fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store'});
-                        if (res.ok) {
-                            successCount++;
-                            const endTime = performance.now();
-                            totalLatency += (endTime - startTime);
-                            latencyCount++;
-                        }
-                    } catch (err) {
-                        // 压测过猛导致本地网络溢出时捕获异常，防止网页卡死
-                    }
-                }
-            } finally {
-                 if (activeWorkers > 0) activeWorkers--;
-            }
-        }
-
-        // 调度启动器：根据滑块指定的并发数，并发启动对应数量的死循环协程
-        function startStressWorkers() {
-            successCount = 0;
-            lastSuccessCount = 0;
-            totalLatency = 0;
-            latencyCount = 0;
-            
-            for (let i = 0; i < concurrency; i++) {
-                worker();
-            }
-        }
-
-        // 初始化 chart 图表（QPS）
-        const ctx = document.getElementById('qpsChart').getContext('2d');
-        const MAX_DATA_POINTS = 20;
-        const chartLabels = Array(MAX_DATA_POINTS).fill('');
-        const chartData = Array(MAX_DATA_POINTS).fill(0);
-
-        const qpsChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: chartLabels,
-                datasets: [{
-                    label: '实时吞吐量(QPS)',
-                    data: chartData,
-                    borderColor: '#00ff66',
-                    borderWidth: 2,
-                    backgroundColor:'rgba(0, 255, 103, 0.08)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: {display: false} },
-                scales: {
-                    x: { grid: { color: '#222' }, ticks: { display: false } },
-                    y: {
-                        grid: { color: '#222' },
-                        ticks: { 
-                            color: '#00ff66', 
-                            font: { family: 'Courier New'},
-                            callback: function(value) { if (value % 1 === 0) return value; }
-                        },
-                        beginAtZero: true,
-                        suggestedMax: 10 // 当所有数据都为 0 时，Y 轴至少维持 0~10 的大厂高开阔度，绝不自适应缩放到 1！
-                    }
-                },
-            }
-        });
-    
-        // 定时器 A：每秒获取信息
-        function refreshMonitor() {
-            fetch('/api/monitor')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('status-badge').innerText = data.status;
-                    document.getElementById('uptime-val').innerText = data.uptime_seconds + 's';
-                    document.getElementById('engine-val').innerText = data.engine;
-
-                    const currentTotal = data.total_request || 0;
-                    if (isFirstHeartbeat) {
-                        lastTotalRequests = currentTotal;
-                        isFirstHeartbeat = false;
-                        return;
-                    }
-                    let globalQps = isBlasting ? (currentTotal - lastTotalRequests) : 0;
-                    lastTotalRequests = currentTotal;
-                    let avgLatency = 0;
-                    if (latencyCount > 0) {
-                        avgLatency = Math.round(totalLatency / latencyCount);
-                    }
-                    totalLatency = 0;
-                    latencyCount = 0;
-
-                    
-                    document.getElementById('qpsDisplay').innerText = globalQps.toLocaleString();
-                    document.getElementById('totalSuccessDisplay').innerText = currentTotal.toLocaleString();
-                    document.getElementById('latencyDisplay').innerText = isBlasting ? (avgLatency + "ms") : "0ms";
-
-                    // 给定横纵坐标
-                    qpsChart.data.datasets[0].data.push(globalQps);
-                    qpsChart.data.labels.push(new Date().toLocaleTimeString().substr(3, 5));
-
-                    if (qpsChart.data.datasets[0].data.length > MAX_DATA_POINTS) {
-                        qpsChart.data.datasets[0].data.shift();
-                        qpsChart.data.labels.shift();
-                    }
-                    // 重新绘制图表
-                    qpsChart.update();
-                })
-                .catch(err => {
-                    document.getElementById('status-badge').innerText = 'OFFLINE';
-                    document.getElementById('status-badge').style.background = '#ff3333';
-                });
-        }
-        
-        // 页面加载后立刻开始高频心跳刷新
-        setInterval(refreshMonitor, 1000);
-        refreshMonitor();
-
-        // 异步 B : 拉取历史留言 (GET)
-        function fetchComments() {
-            fetch('/api/comment?_t=' + Date.now())
-                .then(res => res.json())
-                .then(data => {
-                    const container = document.getElementById('comment-container');
-                    if(data.length === 0) { container.innerHTML = "暂无留言，快来抢沙发！"; return; }
-                    container.innerHTML = data.map(item => `<div class="comment-item">✦ 匿名客: ${item}</div>`).join('');
-                    container.scrollTop = container.scrollHeight;
-                });
-        }
-        fetchComments();
-
-        // 异步 C：提交留言 (POST)
-        function submitComment() {
-            const nick = document.getElementById('nickname').value;
-            const text = document.getElementById('content').value;
-            if(!nick || !text) { alert('内容不能为空！'); return; }
-
-            // 物理打包成普通字符串发送
-            const payload = `${nick}: ${text}`;
-
-            fetch('/api/comment', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain; charset=utf-8' // 明确告诉后端我们喷的是纯文本
-                },
-                body: payload
-            })
-            .then(res => res.json())
-            .then(data => {
-                if(data.result === "SUCCESS" || data.status === "SUCCESS") {
-                    document.getElementById('content').value = ''; // 清空输入框
-                    setTimeout(fetchComments, 50);
-                } else {
-                    alert('后端报错: ' + data.msg);
-                }
-            }).catch(err => {
-                alert('网络发射失败，请检查 C++ 服务器状态');
-            });
-        }
-    </script>
-</body>
-</html>
