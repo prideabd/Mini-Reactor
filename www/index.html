@@ -262,7 +262,7 @@
         }
 
         // 统一并网实例化四大监控图表引擎
-        const qpsChart = createMiniChart('qpsChart', '#00ff66', 'rgba(0, 255, 103, 0.08)', 200000, true);
+        const qpsChart = createMiniChart('qpsChart', '#00ff66', 'rgba(0, 255, 103, 0.08)', 10, true);
         const cpuChart = createMiniChart('cpuChart', '#00ff66', 'rgba(0, 255, 103, 0.04)', 100);
         const memChart = createMiniChart('memChart', '#33ccff', 'rgba(51, 204, 255, 0.04)', 100);
         const ioChart  = createMiniChart('ioChart', '#ffcc00', 'rgba(255, 204, 0, 0.04)', 50);
@@ -345,6 +345,14 @@
                     pushTimelineData(cpuChart, smoothedCpu);
                     pushTimelineData(memChart, smoothedMem);
                     pushTimelineData(ioChart, smoothedIo);
+                    
+                    const qpsDataArr = qpsChart.data.datasets[0].data;
+                    const currentMaxQps = Math.max(...qpsDataArr);
+                    // 动态放大 1.2 倍作为量程上限（留出 20% 的顶部呼吸空间），最低保障 100 量程
+                    qpsChart.options.scales.y.suggestedMax = Math.max(currentMaxQps * 1.2, 100);
+                    qpsChart.update('none'); // 高效通知缩放更新
+                    
+                    fetchComments();
                 })
                 .catch(err => {
                     document.getElementById('status-badge').innerText = 'OFFLINE';
@@ -363,7 +371,12 @@
                 .then(data => {
                     const container = document.getElementById('comment-container');
                     if(data.length === 0) { container.innerHTML = "暂无留言，快来抢沙发！"; return; }
-                    container.innerHTML = data.map(item => `<div class="comment-item">✦ 匿名客: ${item}</div>`).join('');
+                    container.innerHTML = data.map(item => `
+                        <div class="comment-item" style="border-bottom: 1px dashed #222; padding: 10px 0; font-size: 14px; line-height: 1.5;">
+                            <span style="color: #00ff66; font-weight: bold; text-shadow: 0 0 5px rgba(0,255,102,0.3);">✦ [${item.nick}]</span> 
+                            <span style="color: #aaa; margin-left: 8px;">${item.text}</span>
+                        </div>
+                    `).join('');
                     container.scrollTop = container.scrollHeight;
                 });
         }

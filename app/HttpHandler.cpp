@@ -13,6 +13,9 @@
 #include <sstream>
 #include <chrono>
 #include <iomanip>
+#include <vector>
+#include <array>
+#include <string>
 
 #include "HttpHandler.h"
 #include "reactor/net/TcpConnection.h"
@@ -23,6 +26,45 @@ namespace app {
 
 // 全局变量初始化，必须在.cpp中初始化
 std::atomic<uint64_t> g_global_request_count{0};
+constexpr size_t MAX_MEM_COMMENTS = 50;
+
+struct MemoryComment {
+    std::string nickname;
+    std::string content;
+    uint64_t sequence{0};
+};
+
+// 预分配定长静态内存矩阵
+std::array<MemoryComment, MAX_MEM_COMMENTS> g_comment_ring_buffer;
+std::atomic<uint64_t> g_comment_sequence{0};
+
+// 往纯内存中原子无锁写入一条 昵称-评论
+void PushMemoryComment(const std::string& nickname, const std::string& content) {
+    // 1. 原子抢占槽位（多线程在此处各奔东西，分流到不同槽位，完全无锁）
+    uint64_t seq = g_comment_sequence.fetch_add(1, std::memory_order_relaxed);
+    size_t index = seq % MAX_MEM_COMMENTS;
+    // 2. 写入结构化数据到专属内存空间
+    g_comment_ring_buffer[index].nickname = nickname;
+    g_comment_ring_buffer[index].content = content;
+    // 3. 释放屏障：更新版本戳（标记当前槽位写入就绪，其值为当前真实的全局 seq + 1）
+    g_comment_ring_buffer[index].sequence = seq + 1;
+}
+
+// 纯内存高并发安全拉取最新的结构化留言列表
+std::vector<std::pair<std::string, std::string>> GetMemoryComments() {
+    std::vector<std::pair<std::string, std::string>> comments;
+    uint64_t current_max_seq = g_comment_sequence.load(std::memory_order_relaxed);
+    // 计算当前由于循环覆盖所产生的合法起始时间边界
+    uint64_t start_seq = (current_max_seq > MAX_MEM_COMMENTS) ? (current_max_seq - MAX_MEM_COMMENTS) : 0;
+    for (uint64_t i = start_seq; i < current_max_seq; ++i) {
+        size_t index = i % MAX_MEM_COMMENTS;
+        // 双重校验/乐观读锁：如果槽位的版本戳刚好等于 s + 1，说明该槽位已经写完且在此刻未发生写覆盖，数据安全
+        if (g_comment_ring_buffer[index].sequence == i + 1) {
+            comments.push_back(std::make_pair(g_comment_ring_buffer[index].nickname, g_comment_ring_buffer[index].content));
+        }
+    }
+    return comments;
+}
 
 // 根据文件后缀名，自动匹配 HTTP 标准媒体类型（MIME Type）
 std::string GetMimeType(const std::string& path) {
@@ -121,22 +163,25 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     // 分支 B：提交留言（POST 写入）
     // ==========================================
     else if (req.path == "/api/comment" && req.method == "POST") {
-        content_type = "Context-Type: " + GetMimeType(".json") + "\r\n";
+        content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
 
         // 1. 抽取前端送过来的 body 原始数据
         std::string raw_body = req.body;
-        LOG_INFO << "📝 [HttpHandler]: 收到新留言负载: " << raw_body;
+        LOG_INFO << "📝 [HttpHandler]: ring buffer 收到新留言负载: " << raw_body;
 
-        // 2. 将留言以 iOS::app (追加模式) 钉死写入到本地磁盘文件
-        std::ofstream db_file("./comments.txt", std::ios::app);
-        if (db_file.is_open()) {
-            db_file << raw_body << "\n"; // 一行一条记录
-            db_file.close();
-            body = "{\"result\":\"SUCCESS\",\"msg\":\"留言已安全落盘\"}";
-        } else {
-            status_line = "HTTP/1.1 500 Internal Server Error\r\n";
-            body = "{\"result\":\"FAIL\",\"msg\":\"磁盘文件写入失败\"}";
+        // 2. 取出昵称和留言
+        std::string nick = "匿名极客";
+        std::string text = raw_body;
+        size_t delimiter_pos = raw_body.find(": ");
+        if (delimiter_pos != std::string::npos) {
+            nick = raw_body.substr(0, delimiter_pos);
+            text = raw_body.substr(delimiter_pos + 2);
         }
+        // 3. 放入环形队列
+        PushMemoryComment(nick, text);
+
+        body = "{\"result\":\"SUCCESS\",\"msg\":\"纯内存原子抢占成功\"}";
+        
     }
     // ==========================================
     // 分支 C：拉取留言列表（GET 读取）
@@ -144,24 +189,17 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     else if (req.path == "/api/comment" && (req.method == "GET" || req.method.empty())) {
         content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
         
-        // 1. 从磁盘一行行抠出所有历史留言
-        std::ifstream db_file("./comments.txt");
-        std::vector<std::string> comments;
-        if (db_file.is_open()) {
-            std::string line;
-            while (std::getline(db_file, line)) {
-                if (!line.empty()) comments.push_back(line);
-            }
-            db_file.close();
-        }
+        // 1. 从内存抠出最新留言
+        auto comments = GetMemoryComments();
 
         // 2. 纯手工组装成标准的 JSON 数组格式返还给前端
         std::stringstream json_ss;
         json_ss << "[";
         for (size_t i = 0; i < comments.size(); ++i) {
-            // 简单的解析伪 JSON (实际开发中引入 nlohmann/json 会更优雅)
-            // 目无零依赖保持绝对纯净，把整行当字符串返回
-            json_ss << "\"" << comments[i] << "\"";
+            json_ss << "{"
+                    << "\"nick\":\"" << comments[i].first << "\","
+                    << "\"text\":\"" << comments[i].second << "\""
+                    << "}";
             if (i != comments.size() - 1) json_ss << ",";
         }
         json_ss << "]";
