@@ -9,7 +9,7 @@ from openai import OpenAI
 
 # 1. 初始化大模型客户端
 client = OpenAI(
-    api_key="[REDACTED]",
+    api_key="xxx",
     base_url="https://api.openai.com/v1",
 )
 
