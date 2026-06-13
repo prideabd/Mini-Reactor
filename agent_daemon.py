@@ -1,6 +1,7 @@
 import time
 import requests
 import json
+import os
 from openai import OpenAI
 
 # =====================================================================
@@ -8,8 +9,9 @@ from openai import OpenAI
 # =====================================================================
 
 # 1. 初始化大模型客户端
+api_key_from_env = os.getenv("DEEKSEEK_API_KEY")
 client = OpenAI(
-    api_key="xxx",
+    api_key=api_key_from_env,
     base_url="https://api.openai.com/v1",
 )
 
