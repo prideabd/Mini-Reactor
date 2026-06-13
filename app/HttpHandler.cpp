@@ -38,6 +38,10 @@ struct MemoryComment {
 std::array<MemoryComment, MAX_MEM_COMMENTS> g_comment_ring_buffer;
 std::atomic<uint64_t> g_comment_sequence{0};
 
+// agent 控制原子变量
+std::atomic<bool> g_agent_cooldown_mode{false};
+std::atomic<bool> g_agent_filter_mode{false};
+
 // 往纯内存中原子无锁写入一条 昵称-评论
 void PushMemoryComment(const std::string& nickname, const std::string& content) {
     // 1. 原子抢占槽位（多线程在此处各奔东西，分流到不同槽位，完全无锁）
@@ -177,6 +181,14 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
             nick = raw_body.substr(0, delimiter_pos);
             text = raw_body.substr(delimiter_pos + 2);
         }
+
+        if (g_agent_cooldown_mode.load(std::memory_order_acquire)) {
+            status_line = "HTTP/1.1 200 OK\r\n"; // 保持200，但回喷拒绝的JSON
+            content_type = "Content-Type: application/json; charset=utf-8\r\n";
+            body = "{\"result\":\"ERROR\",\"msg\":\"[AI 熔断保护中] 服务器当前遭遇高并发冲击，留言板已进入紧急安全冷却模式。\"}";
+            return;
+        }
+
         // 3. 放入环形队列
         PushMemoryComment(nick, text);
 
@@ -216,7 +228,96 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         // 删掉原本的内部独立 Send 和 return，交给末尾统一对齐组装
     }
     // ==========================================
-    // 分支 E：万能静态文件托管引擎（磁盘文件映射）
+    // 分支 E：Agent 专属全测序数据上报
+    // ==========================================
+    else if (req.path == "/api/agent/telemetry") {
+        content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
+        
+        // 1. 获取当前性能快照
+        uint64_t current_reqs = g_global_request_count.load(std::memory_order_relaxed);
+        // 2. 获取当前环形原子变量的最新状态
+        uint64_t current_seq = g_comment_sequence.load(std::memory_order_relaxed);
+        // 3. 计算最新50条留言的起点
+        uint64_t start_seq = (current_seq > MAX_MEM_COMMENTS) ? (current_seq - MAX_MEM_COMMENTS) : 0;
+
+        std::stringstream json_ss;
+        json_ss << "{\n";
+        json_ss << "  \"metrics\": {\n";
+        json_ss << "    \"total_requests\": " << current_reqs << ",\n";
+        json_ss << "    \"current_sequence\": " << current_seq << "\n";
+        json_ss << "  },\n";
+        json_ss << "  \"comments\": [\n";
+
+        bool first = true;
+        // 4. 标准无锁乐观锁遍历，把新鲜数据拼给大模型
+        for (uint64_t s = start_seq; s < current_seq; ++s) {
+            size_t index = s % MAX_MEM_COMMENTS; //
+            
+            // 乐观锁身份与完整性对账：写完了且没被改动才上报
+            if (g_comment_ring_buffer[index].sequence == s + 1) { //
+                if (!first) json_ss << ",\n";
+                json_ss << "    {\"seq\": " << s << ", ";
+                json_ss << "\"nick\": \"" << g_comment_ring_buffer[index].nickname << "\", ";
+                json_ss << "\"text\": \"" << g_comment_ring_buffer[index].content << "\"}";
+                first = false;
+            }
+        }
+        json_ss << "\n  ]\n";
+        json_ss << "}";
+
+        body = json_ss.str();
+    }
+    // ==========================================
+    // 分支 F：agent 反向控制
+    // ==========================================
+    else if (req.path == "/api/agent/control" && req.method == "POST") {
+        content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
+
+        // 1. 轻量地解析 Agent 发过来的原始控制指令
+        // 期望格式样例：cooldown:true 或 block_seq:30
+        std::string command = req.body;
+        std::string action_taken = "NONE";
+
+        // 指令 A：一键全站紧急降级冷却
+        if (command == "cooldown:true") {
+            g_agent_cooldown_mode.store(true, std::memory_order_relaxed);
+            action_taken = "SYSTEM_COOLDOWN_ACTIVATED";
+            LOG_WARN << "🚨 [AI Agent Action]: 全站紧急冷却模式已物理激活！";
+        } else if (command == "cooldown:false") {
+            g_agent_cooldown_mode.store(false, std::memory_order_relaxed);
+            action_taken = "SYSTEM_COOLDOWN_DEACTIVATED";
+            LOG_INFO << "🟢 [AI Agent Action]: 紧急冷却解封，恢复常态。";
+        }
+        // 指令 B: 对无锁环形队列中的某条恶意留言进行抹除
+        else if (command.rfind("block_seq:", 0) == 0) {
+            try {
+                uint64_t block_seq = std::stoull(command.substr(10));
+                size_t index = block_seq % MAX_MEM_COMMENTS;
+                // 乐观锁
+                if (g_comment_ring_buffer[index].sequence == block_seq + 1) {
+                    g_comment_ring_buffer[index].nickname = "[AI 已拦截]";
+                    g_comment_ring_buffer[index].content = "⚠️ 此条留言因涉嫌恶意攻击或垃圾广告，已被 AI Agent 影子进程自动化风控执行内存抹除。";
+                    action_taken = "COMMENT_ERASED_SUCESS";
+                    LOG_WARN << "🛡️ [AI Agent Action]: 成功对序列号 " << block_seq << " 执行无锁内容擦除。";
+                } else {
+                    action_taken = "COMMENT_VERSION_MISMATCH"; // 已经被别人覆盖了，无需操作
+                }
+            } catch (...) {
+                action_taken = "PARSE_ERROR";
+            }
+        }
+
+        // 2. 回喷标准的执行状态确认帧给 Agent
+        std::stringstream json_ss;
+        json_ss << "{\n";
+        json_ss << "  \"status\": \"SUCCESS\",\n";
+        json_ss << "  \"action\": \"" << action_taken << "\"\n";
+        json_ss << "}";
+        
+        body = json_ss.str();
+    }
+    // ==========================================
+    // 分支 G：万能静态文件托管引擎（磁盘文件映射）
     // ==========================================
     else {
         // 1. 定位物理文件路径，防止路径穿越攻击，默认根路由指向 index.html
@@ -236,7 +337,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
             // 3. 动态识别文件后缀，精确判定 Content-Type 保证网页皮肤和特效不丢失
             content_type = "Content-Type: " + GetMimeType(target_path) + "\r\n";
         } 
-        // 3. 磁盘上挖不出这个文件 -> 优雅下行，降级回喷 404
+        // 4. 磁盘上挖不出这个文件 -> 优雅下行，降级回喷 404
         else {
             status_line = "HTTP/1.1 404 Not Found\r\n";
             content_type = "Content-Type: " + GetMimeType(".html") + "\r\n";
@@ -257,7 +358,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 << "\r\n"             // 切分 Header 与 Body 的核心空行
                 << body << "\r\n";    // 🌟 加上标准尾部结束标记，彻底阻断 ab 提前闪退
     
-    // 🌟 顺藤摸瓜，通过连接将拼装好的数据回喷给内核缓冲区
+    // 顺藤摸瓜，通过连接将拼装好的数据回喷给内核缓冲区
     conn->Send(response_ss.str());
 }
 
