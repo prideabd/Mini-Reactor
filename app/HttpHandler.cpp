@@ -94,6 +94,36 @@ std::string GetMimeType(const std::string& path) {
     return "text/plain; charset=utf-8"; // 默认
 }
 
+// 抽取出的独立高可用 URL 物理解码函数
+std::string UrlDecode(const std::string& str) {
+    std::string result;
+    result.reserve(str.size()); // 优化内存分配，榨干高并发下的吞吐性能
+    
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '+') {
+            result += ' '; // 标准表单规范：将 '+' 还原为空格
+        } else if (str[i] == '%' && i + 2 < str.length()) {
+            // 物理把两个十六进制字符（如 E4）拼成一个真实字节
+            char high = str[i + 1];
+            char low = str[i + 2];
+            
+            auto HexToChar = [](char c) -> int {
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= '0' && c <= '9') return c - '0';
+                return 0;
+            };
+            
+            int byte_val = (HexToChar(high) << 4) + HexToChar(low);
+            result += static_cast<char>(byte_val);
+            i += 2; // 指针前移，跳过已经消费的两个十六进制位
+        } else {
+            result += str[i];
+        }
+    }
+    return result;
+}
+
 void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                        const reactor::http::HttpRequest& req)
 {
@@ -108,7 +138,6 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     // ==========================================
     // 分支 A：硬核后端动态核心监控 API 接口
     // ==========================================
-   
     if (req.path == "/api/monitor") {
         content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
 
@@ -169,18 +198,40 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     else if (req.path == "/api/comment" && req.method == "POST") {
         content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
 
+        // 安全审计：前端必须依约贴上 urlencoded 表单的标签，否则直接打死
+        if (req.headers.find("content-type") == req.headers.end() || 
+            req.headers.at("content-type").find("application/x-www-form-urlencoded") == std::string::npos) {
+            status_line = "HTTP/1.1 415 Unsupported Media Type\r\n";
+            body = "{\"result\":\"ERROR\",\"msg\":\"[网关拒绝]: 留言投递只认 urlencoded 标准表单格式！\"}";
+            return;
+        }
+
         // 1. 抽取前端送过来的 body 原始数据
         std::string raw_body = req.body;
         LOG_INFO << "📝 [HttpHandler]: ring buffer 收到新留言负载: " << raw_body;
 
-        // 2. 取出昵称和留言
+        // 2. 取出昵称和留言，切分 name=xxx&content=yyy 格式
         std::string nick = "匿名极客";
         std::string text = raw_body;
-        size_t delimiter_pos = raw_body.find(": ");
-        if (delimiter_pos != std::string::npos) {
-            nick = raw_body.substr(0, delimiter_pos);
-            text = raw_body.substr(delimiter_pos + 2);
+        if (!raw_body.empty()) {
+            std::string key_value;
+            std::stringstream ss(raw_body);
+            while (std::getline(ss, key_value, '&')) {
+                size_t pos = key_value.find('=');
+                if (pos != std::string::npos) {
+                    std::string key = key_value.substr(0, pos);
+                    std::string value = key_value.substr(pos + 1);
+                    
+                    std::string decode_value = UrlDecode(value);
+                    if (key == "name") {
+                        nick = decode_value;
+                    } else if (key == "content") {
+                        text = decode_value;
+                    }
+                }
+            }
         }
+        LOG_INFO << "📊 [C++ 协议层对账完成] 成功解包标准表单 -> 昵称: " << nick << " | 内容: " << text;      
 
         if (g_agent_cooldown_mode.load(std::memory_order_acquire)) {
             status_line = "HTTP/1.1 200 OK\r\n"; // 保持200，但回喷拒绝的JSON
@@ -279,17 +330,17 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         std::string action_taken = "NONE";
 
         // 指令 A：一键全站紧急降级冷却
-        if (command == "cooldown:true") {
+        if (command == "cooldown:true" || command == "cooldown=true") {
             g_agent_cooldown_mode.store(true, std::memory_order_relaxed);
             action_taken = "SYSTEM_COOLDOWN_ACTIVATED";
             LOG_WARN << "🚨 [AI Agent Action]: 全站紧急冷却模式已物理激活！";
-        } else if (command == "cooldown:false") {
+        } else if (command == "cooldown:false"|| command == "cooldown=false") {
             g_agent_cooldown_mode.store(false, std::memory_order_relaxed);
             action_taken = "SYSTEM_COOLDOWN_DEACTIVATED";
             LOG_INFO << "🟢 [AI Agent Action]: 紧急冷却解封，恢复常态。";
         }
         // 指令 B: 对无锁环形队列中的某条恶意留言进行抹除
-        else if (command.rfind("block_seq:", 0) == 0) {
+        else if (command.rfind("block_seq:", 0) == 0 || command.rfind("block_seq=", 0) == 0) {
             try {
                 uint64_t block_seq = std::stoull(command.substr(10));
                 size_t index = block_seq % MAX_MEM_COMMENTS;
@@ -304,6 +355,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 }
             } catch (...) {
                 action_taken = "PARSE_ERROR";
+                LOG_ERROR << "❌ [HttpHandler]: 解析 Agent 序列号失败: " << e.what();
             }
         }
 

@@ -2,6 +2,7 @@ import time
 import requests
 import json
 import os
+import re
 from openai import OpenAI
 
 # =====================================================================
@@ -12,7 +13,7 @@ from openai import OpenAI
 api_key_from_env = os.getenv("DEEPSEEK_API_KEY")
 client = OpenAI(
     api_key=api_key_from_env,
-    base_url="https://api.openai.com/v1",
+    base_url="https://api.deepseek.com/v1",
 )
 
 # 2. C++ 引擎监听的物理本地回环地址
@@ -79,23 +80,38 @@ def run_agent_guard_loop():
                     ],
                     response_format={"type": "json_object"}, # 约束返回为 json 格式
                     stream=False,
-                    timeout=5
+                    timeout=15
                 )
 
                 # 解析大模型的推理结果
-                ai_decision = json.loads(ai_response.choices[0].message.content)
+                raw_content = ai_response.choices[0].message.content
+
+                try:
+                    # 1. 🛡️ 终极过滤器：利用正则把所有不合规的裸露控制字符（ASCII 0-31，除了换行和制表符）物理剔除
+                    clean_content = re.sub(r'[\x00-\x1F\x7F]', '', raw_content)
+                    
+                    # 2. 如果包含了 Markdown 标记，进行强行刮骨
+                    clean_content = clean_content.replace("```json", "").replace("```", "").strip()
+                    
+                    # 3. 带上 strict=False 进行绝对解析
+                    ai_decision = json.loads(clean_content, strict=False)
+                except Exception as e:
+                    # 4. 万一真的格式乱了，做一次兜底，防止进程坠毁或死循环暴击钱包
+                    print(f"⚠️ [解析降级]: 大模型格式异常，执行人工放行。原因: {e}")
+                    ai_decision = {"has_violation": False, "target_seq": -1, "reason": "解析失败兜底"}
+
                 print(f"🤖 [AI 动态诊断波形]: {ai_decision.get('reason', '一切正常')}")
 
                 # ────────────────────────────────────────────────────────
                 # 🛡️ 动作三：如果大模型亮起红灯，Agent 立刻发起反向原子擦除
                 # ────────────────────────────────────────────────────────
-                if ai_decision.get("has_violation") and ai_decision.get("target_seq", -1) != -11:
+                if ai_decision.get("has_violation") and ai_decision.get("target_seq", -1) != -1:
                     violate_seq = ai_decision.get("target_seq")
                     print(f"🚨 [AI 警报]: 检测到恶性违规留言！立刻对 seq:{violate_seq} 发起反向重写拦截！")
 
                     # 拼装反向控制协议载荷, 通知 C++ 后台处理
                     control_url = f"{CPP_SERVER_CUL}/api/agent/control"
-                    control_payload = f"block_seq={violate_seq}"
+                    control_payload = {"block_seq": violate_seq}
 
                     control_res = requests.post(control_url, data=control_payload, timeout=2)
                     print(f"🎛️ [C++ 核心原子反馈]: {control_res.text}")
@@ -112,4 +128,3 @@ def run_agent_guard_loop():
 
 if __name__== "__main__":
     run_agent_guard_loop()
-

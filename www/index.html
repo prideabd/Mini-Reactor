@@ -388,15 +388,18 @@
             const text = document.getElementById('content').value;
             if(!nick || !text) { alert('内容不能为空！'); return; }
 
-            // 物理打包成普通字符串发送
-            const payload = `${nick}: ${text}`;
+            // 使用标准内置组件将数据封装成标准的 URL 键值对形式
+            const params = new URLSearchParams();
+            params.append('name', nick);
+            params.append('content', text);
 
             fetch('/api/comment', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'text/plain; charset=utf-8' // 明确告诉后端我们喷的是纯文本
+                    // 明确告诉 C++ 后端，发射的是标准的工业表单数据
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'
                 },
-                body: payload
+                body: params.toString()
             })
             .then(res => res.json())
             .then(data => {
