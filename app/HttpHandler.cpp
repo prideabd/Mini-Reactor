@@ -188,63 +188,50 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 << "\"cpu_usage\":" << std::fixed << std::setprecision(1) << last_cpu << ","
                 << "\"mem_available\":" << std::fixed << std::setprecision(1) << last_mem << ","
                 << "\"disk_io\":" << std::fixed << std::setprecision(1) << last_io << ","
+                << "\"cooldown_mode\":" << (g_agent_cooldown_mode.load(std::memory_order_relaxed) ? "true" : "false") << ","
                 << "\"engine\":\"Mini-Reactor-v2.0\""
                 << "}";
         body = json_ss.str();
     } 
     // ==========================================
-    // 分支 B：提交留言（POST 写入）
+    // 分支 B：提交留言（POST 写入）- 熔断修复
     // ==========================================
     else if (req.path == "/api/comment" && req.method == "POST") {
         content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
 
-        // 安全审计：前端必须依约贴上 urlencoded 表单的标签，否则直接打死
+        // 安全审计：前端表单格式校验
         if (req.headers.find("content-type") == req.headers.end() || 
             req.headers.at("content-type").find("application/x-www-form-urlencoded") == std::string::npos) {
             status_line = "HTTP/1.1 415 Unsupported Media Type\r\n";
             body = "{\"result\":\"ERROR\",\"msg\":\"[网关拒绝]: 留言投递只认 urlencoded 标准表单格式！\"}";
-            return;
         }
-
-        // 1. 抽取前端送过来的 body 原始数据
-        std::string raw_body = req.body;
-        LOG_INFO << "📝 [HttpHandler]: ring buffer 收到新留言负载: " << raw_body;
-
-        // 2. 取出昵称和留言，切分 name=xxx&content=yyy 格式
-        std::string nick = "匿名极客";
-        std::string text = raw_body;
-        if (!raw_body.empty()) {
-            std::string key_value;
-            std::stringstream ss(raw_body);
-            while (std::getline(ss, key_value, '&')) {
-                size_t pos = key_value.find('=');
-                if (pos != std::string::npos) {
-                    std::string key = key_value.substr(0, pos);
-                    std::string value = key_value.substr(pos + 1);
-                    
-                    std::string decode_value = UrlDecode(value);
-                    if (key == "name") {
-                        nick = decode_value;
-                    } else if (key == "content") {
-                        text = decode_value;
+        // 检查原子变量熔断
+        else if (g_agent_cooldown_mode.load(std::memory_order_acquire)) {
+            status_line = "HTTP/1.1 200 OK\r\n"; 
+            body = "{\"result\":\"ERROR\",\"msg\":\"[AI 熔断保护中] 服务器当前遭遇高并发冲击，留言板已进入紧急安全冷却模式。\"}";
+        }
+        else {
+            // 1. 正常提取表单数据进行无锁写入
+            std::string raw_body = req.body;
+            std::string nick = "匿名极客";
+            std::string text = raw_body;
+            if (!raw_body.empty()) {
+                std::string key_value;
+                std::stringstream ss(raw_body);
+                while (std::getline(ss, key_value, '&')) {
+                    size_t pos = key_value.find('=');
+                    if (pos != std::string::npos) {
+                        std::string key = key_value.substr(0, pos);
+                        std::string value = key_value.substr(pos + 1);
+                        std::string decode_value = UrlDecode(value);
+                        if (key == "name") nick = decode_value;
+                        else if (key == "content") text = decode_value;
                     }
                 }
             }
+            PushMemoryComment(nick, text);
+            body = "{\"result\":\"SUCCESS\",\"msg\":\"纯内存原子抢占成功\"}";
         }
-        LOG_INFO << "📊 [C++ 协议层对账完成] 成功解包标准表单 -> 昵称: " << nick << " | 内容: " << text;      
-
-        if (g_agent_cooldown_mode.load(std::memory_order_acquire)) {
-            status_line = "HTTP/1.1 200 OK\r\n"; // 保持200，但回喷拒绝的JSON
-            content_type = "Content-Type: application/json; charset=utf-8\r\n";
-            body = "{\"result\":\"ERROR\",\"msg\":\"[AI 熔断保护中] 服务器当前遭遇高并发冲击，留言板已进入紧急安全冷却模式。\"}";
-            return;
-        }
-
-        // 3. 放入环形队列
-        PushMemoryComment(nick, text);
-
-        body = "{\"result\":\"SUCCESS\",\"msg\":\"纯内存原子抢占成功\"}";
-        
     }
     // ==========================================
     // 分支 C：拉取留言列表（GET 读取）

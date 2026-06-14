@@ -184,20 +184,38 @@
             const targetUrl = window.location.origin + "/api/stress";
             activeWorkers++;
             
+            // 每个线程在内存中维持的最大未完成请求飞掠窗口（防止浏览器内存溢出）
+            const MAX_FLIGHT_REQUESTS = 15; 
+            let inFlight = 0;
+
             try {
                 while (isBlasting) {
-                    const startTime = performance.now();
-                    try {
-                        const res = await fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store'});
-                        if (res.ok) {
-                            successCount++;
-                            const endTime = performance.now();
-                            totalLatency += (endTime - startTime);
-                            latencyCount++;
-                        }
-                    } catch (err) {
-                        // 压测过猛导致本地网络溢出时捕获异常，防止网页卡死
+                    if (inFlight >= MAX_FLIGHT_REQUESTS) {
+                        // 窗口满了，让出 CPU 时间片，物理等待 4 毫秒再探测
+                        await new Promise(resolve => setTimeout(resolve, 4));
+                        continue;
                     }
+
+                    inFlight++;
+                    const startTime = performance.now();
+
+                    // 🌟 核心改动：不使用 await 阻断，直接发射 Promise 裸奔
+                    fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store' })
+                        .then(res => {
+                            inFlight--;
+                            if (res.ok) {
+                                successCount++;
+                                const endTime = performance.now();
+                                totalLatency += (endTime - startTime);
+                                latencyCount++;
+                            }
+                        })
+                        .catch(err => {
+                            inFlight--; // 发生网络溢出异常也安全释放窗口
+                        });
+
+                    // 物理微调：给浏览器单线程事件循环留出 1 毫秒呼吸机会，防止网页彻底假死
+                    await new Promise(resolve => setTimeout(resolve, 1));
                 }
             } finally {
                  if (activeWorkers > 0) activeWorkers--;
@@ -274,7 +292,17 @@
             fetch('/api/monitor')
                 .then(response => response.json())
                 .then(data => {
-                    document.getElementById('status-badge').innerText = data.status;
+                    // 处于冷却模式，亮起红灯警报
+                    const badge = document.getElementById('status-badge');
+                    if (data.cooldown_mode == true) {
+                        badge.innerText = "🚨 EMERGENCY COOLDOWN (AI 熔断中)";
+                        badge.style.background = "#ff3333";
+                        badge.style.color = "#fff";
+                    } else {
+                        badge.innerText = data.status;
+                        badge.style.background = "#00ff66";
+                        badge.style.color = "#000";
+                    }
                     document.getElementById('uptime-val').innerText = data.uptime_seconds + 's';
                     document.getElementById('engine-val').innerText = data.engine;
 
