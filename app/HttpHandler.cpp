@@ -353,7 +353,7 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 } else {
                     action_taken = "COMMENT_VERSION_MISMATCH"; // 已经被别人覆盖了，无需操作
                 }
-            } catch (...) {
+            } catch (const std::exception& e) {
                 action_taken = "PARSE_ERROR";
                 LOG_ERROR << "❌ [HttpHandler]: 解析 Agent 序列号失败: " << e.what();
             }
