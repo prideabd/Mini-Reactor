@@ -17,12 +17,16 @@
 #include <array>
 #include <string>
 
+#include "nlohmann/json.hpp" // 第三库函数
+
 #include "HttpHandler.h"
 #include "reactor/net/TcpConnection.h"
 #include "reactor/http/HttpCodec.h"
 #include "reactor/log/Logger.h"
 
 namespace app {
+
+using json = nlohmann::json;
 
 // 全局变量初始化，必须在.cpp中初始化
 std::atomic<uint64_t> g_global_request_count{0};
@@ -177,21 +181,23 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         double target_io = 0.1 + (instant_qps / 1400.0) * 45.8; // 磁盘 I/O 吞吐随压测猛烈爆发 (MB/s)
         last_io = last_io * 0.3 + target_io * 0.7;
 
-        // 3. 手工拼装轻量级标准 JSON 报文
-        std::stringstream json_ss;
-        json_ss << "{"
-                << "\"status\":\"RUNNING\","
-                << "\"uptime_seconds\":" << uptime_sec << ","
-                << "\"live_connections\":" << live_connections << ","
-                << "\"sub_reactors\":" << active_threads << ","
-                << "\"total_request\":" <<g_global_request_count.load(std::memory_order_relaxed) << ","
-                << "\"cpu_usage\":" << std::fixed << std::setprecision(1) << last_cpu << ","
-                << "\"mem_available\":" << std::fixed << std::setprecision(1) << last_mem << ","
-                << "\"disk_io\":" << std::fixed << std::setprecision(1) << last_io << ","
-                << "\"cooldown_mode\":" << (g_agent_cooldown_mode.load(std::memory_order_relaxed) ? "true" : "false") << ","
-                << "\"engine\":\"Mini-Reactor-v2.0\""
-                << "}";
-        body = json_ss.str();
+        // 3. 使用 nlohmann/json 优雅组装监控指标
+        json resp;
+        resp["status"] = "RUNNING";
+        resp["uptime_seconds"] = uptime_sec;
+        resp["live_connections"] = live_connections;
+        resp["sub_reactors"] = active_threads;
+        resp["total_requests"] = g_global_request_count.load(std::memory_order_relaxed);
+        
+        // nlohmann 支持直接对浮点数进行格式化映射，无需 std::setprecision
+        resp["cpu_usage"] = std::round(last_cpu * 10.0) / 10.0;
+        resp["mem_available"] = std::round(last_mem * 10.0) / 10.0;
+        resp["disk_io"] = std::round(last_io * 10.0) / 10.0;
+        
+        resp["cooldown_mode"] = g_agent_cooldown_mode.load(std::memory_order_relaxed);
+        resp["engine"] = "Mini-Reactor-v2.0";
+
+        body = resp.dump(); // 极速序列化输出
     } 
     // ==========================================
     // 分支 B：提交留言（POST 写入）- 熔断修复
@@ -203,12 +209,18 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         if (req.headers.find("content-type") == req.headers.end() || 
             req.headers.at("content-type").find("application/x-www-form-urlencoded") == std::string::npos) {
             status_line = "HTTP/1.1 415 Unsupported Media Type\r\n";
-            body = "{\"result\":\"ERROR\",\"msg\":\"[网关拒绝]: 留言投递只认 urlencoded 标准表单格式！\"}";
+            json err; 
+            err["result"] = "ERROR"; 
+            err["msg"] = "[网关拒绝]: 留言投递只认 urlencoded 标准表单格式！";
+            body = err.dump();
         }
         // 检查原子变量熔断
         else if (g_agent_cooldown_mode.load(std::memory_order_acquire)) {
             status_line = "HTTP/1.1 200 OK\r\n"; 
-            body = "{\"result\":\"ERROR\",\"msg\":\"[AI 熔断保护中] 服务器当前遭遇高并发冲击，留言板已进入紧急安全冷却模式。\"}";
+            json err;
+            err["result"] = "ERROR"; 
+            err["msg"] = "[AI 熔断保护中] 服务器当前遭遇高并发冲击，留言板已进入紧急安全冷却模式。";
+            body = err.dump();
         }
         else {
             // 1. 正常提取表单数据进行无锁写入
@@ -230,7 +242,10 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 }
             }
             PushMemoryComment(nick, text);
-            body = "{\"result\":\"SUCCESS\",\"msg\":\"纯内存原子抢占成功\"}";
+            json ok; 
+            ok["result"] = "SUCCESS"; 
+            ok["msg"] = "纯内存原子抢占成功";
+            body = ok.dump();
         }
     }
     // ==========================================
@@ -242,18 +257,15 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         // 1. 从内存抠出最新留言
         auto comments = GetMemoryComments();
 
-        // 2. 纯手工组装成标准的 JSON 数组格式返还给前端
-        std::stringstream json_ss;
-        json_ss << "[";
-        for (size_t i = 0; i < comments.size(); ++i) {
-            json_ss << "{"
-                    << "\"nick\":\"" << comments[i].first << "\","
-                    << "\"text\":\"" << comments[i].second << "\""
-                    << "}";
-            if (i != comments.size() - 1) json_ss << ",";
+        // 2. 利用 json::array() 优雅生成 JSON 数组，彻底告别拼逗号的烦恼
+        json arr = json::array();
+        for (const auto& c : comments) {
+            json item;
+            item["nick"] = c.first;   // 自动转义双引号和特殊字符
+            item["text"] = c.second;  // 自动转义双引号和特殊字符
+            arr.push_back(item);
         }
-        json_ss << "]";
-        body = json_ss.str();
+        body = arr.dump();
     }
     // ==========================================
     // 分支 D：压力测试高速接口
@@ -262,8 +274,10 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         content_type = "Content-Type: application/json\r\n";
         // 显式注入允许跨域，方便客户端多路复用
         content_type += "Access-Control-Allow-Origin: *\r\n"; 
-        body = "{\"status\":\"ok\",\"msg\":\"Boom! C++ Reactor Core Handled This Successfully.\"}";
-        // 删掉原本的内部独立 Send 和 return，交给末尾统一对齐组装
+        json ok; 
+        ok["status"] = "ok"; 
+        ok["msg"] = "Boom! C++ Reactor Core Handled This Successfully.";
+        body = ok.dump();
     }
     // ==========================================
     // 分支 E：Agent 专属全测序数据上报
@@ -278,32 +292,25 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
         // 3. 计算最新50条留言的起点
         uint64_t start_seq = (current_seq > MAX_MEM_COMMENTS) ? (current_seq - MAX_MEM_COMMENTS) : 0;
 
-        std::stringstream json_ss;
-        json_ss << "{\n";
-        json_ss << "  \"metrics\": {\n";
-        json_ss << "    \"total_requests\": " << current_reqs << ",\n";
-        json_ss << "    \"current_sequence\": " << current_seq << "\n";
-        json_ss << "  },\n";
-        json_ss << "  \"comments\": [\n";
-
-        bool first = true;
+        json root;
+        root["metrics"]["total_requests"] = current_reqs;
+        root["metrics"]["current_sequence"] = current_seq;
+        json comments_arr = json::array();
         // 4. 标准无锁乐观锁遍历，把新鲜数据拼给大模型
         for (uint64_t s = start_seq; s < current_seq; ++s) {
             size_t index = s % MAX_MEM_COMMENTS; //
             
             // 乐观锁身份与完整性对账：写完了且没被改动才上报
-            if (g_comment_ring_buffer[index].sequence == s + 1) { //
-                if (!first) json_ss << ",\n";
-                json_ss << "    {\"seq\": " << s << ", ";
-                json_ss << "\"nick\": \"" << g_comment_ring_buffer[index].nickname << "\", ";
-                json_ss << "\"text\": \"" << g_comment_ring_buffer[index].content << "\"}";
-                first = false;
+            if (g_comment_ring_buffer[index].sequence == s + 1) {
+                json item;
+                item["seq"] = s;
+                item["nick"] = g_comment_ring_buffer[index].nickname;
+                item["text"] = g_comment_ring_buffer[index].content;
+                comments_arr.push_back(item);
             }
         }
-        json_ss << "\n  ]\n";
-        json_ss << "}";
-
-        body = json_ss.str();
+        root["comments"] = comments_arr;
+        body = root.dump();
     }
     // ==========================================
     // 分支 F：agent 反向控制
@@ -311,80 +318,114 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
     else if (req.path == "/api/agent/control" && req.method == "POST") {
         content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
 
-        // 1. 轻量地解析 Agent 发过来的原始控制指令
-        // 期望格式样例：cooldown:true 或 block_seq:30
-        std::string command = req.body;
+        // 1. 解析 Agent 发过来的原始控制指令
+        // 期望格式样例：cooldown:true 或 block_seq:[10,20,..]
         std::string action_taken = "NONE";
-
-        // 指令 A：一键全站紧急降级冷却
-        if (command == "cooldown:true" || command == "cooldown=true") {
-            g_agent_cooldown_mode.store(true, std::memory_order_relaxed);
-            action_taken = "SYSTEM_COOLDOWN_ACTIVATED";
-            LOG_WARN << "🚨 [AI Agent Action]: 全站紧急冷却模式已物理激活！";
-        } else if (command == "cooldown:false"|| command == "cooldown=false") {
-            g_agent_cooldown_mode.store(false, std::memory_order_relaxed);
-            action_taken = "SYSTEM_COOLDOWN_DEACTIVATED";
-            LOG_INFO << "🟢 [AI Agent Action]: 紧急冷却解封，恢复常态。";
-        }
-        // 指令 B: 对无锁环形队列中的某条恶意留言进行抹除
-        else if (command.rfind("block_seq:", 0) == 0 || command.rfind("block_seq=", 0) == 0) {
-            try {
-                uint64_t block_seq = std::stoull(command.substr(10));
-                size_t index = block_seq % MAX_MEM_COMMENTS;
-                // 乐观锁
-                if (g_comment_ring_buffer[index].sequence == block_seq + 1) {
-                    g_comment_ring_buffer[index].nickname = "[AI 已拦截]";
-                    g_comment_ring_buffer[index].content = "⚠️ 此条留言因涉嫌恶意攻击或垃圾广告，已被 AI Agent 影子进程自动化风控执行内存抹除。";
-                    action_taken = "COMMENT_ERASED_SUCESS";
-                    LOG_WARN << "🛡️ [AI Agent Action]: 成功对序列号 " << block_seq << " 执行无锁内容擦除。";
-                } else {
-                    action_taken = "COMMENT_VERSION_MISMATCH"; // 已经被别人覆盖了，无需操作
+        
+        try {
+            json payload = json::parse(req.body);
+            // 模式 A：一键全站紧急降级冷却
+            if (payload.contains("cooldown") && payload["cooldown"].is_boolean()) {
+                bool is_cooldown = payload["cooldown"].get<bool>();
+                g_agent_cooldown_mode.store(is_cooldown, std::memory_order_relaxed);
+                action_taken = is_cooldown ? "SYSTEM_COOLDOWN_ACTIVATED" : "SYSTEM_COOLDOWN_DEACTIVATED";
+                if (is_cooldown) LOG_WARN << "🚨 [AI Agent]: 全站紧急冷却模式已激活！";
+                else LOG_INFO << "🟢 [AI Agent]: 紧急冷却解封，恢复常态。";
+            }
+            // 模式 B: 批量拦截违规留言
+            else {
+                std::vector<uint64_t> targets;
+                // 兼容最新版的数组批量发送格式: {"block_seqs": [10, 15]}
+                if (payload.contains("block_seqs") && payload["block_seqs"].is_array()) {
+                    for (const auto& item : payload["block_seqs"]) {
+                        if (item.is_number()) targets.push_back(item.get<uint64_t>());
+                    }
                 }
-            } catch (const std::exception& e) {
+                // 兼容单数发送格式: {"block_seq": 10}
+                else if (payload.contains("block_seq") && payload["block_seq"].is_number()) {
+                    targets.push_back(payload["block_seq"].get<uint64_t>());
+                }
+
+                if (!targets.empty()) {
+                    int success_count = 0;
+                    for (uint64_t seq : targets) {
+                        size_t index = seq % MAX_MEM_COMMENTS;
+                        if (g_comment_ring_buffer[index].sequence == seq + 1) {
+                            g_comment_ring_buffer[index].nickname = "[AI 已拦截]";
+                            g_comment_ring_buffer[index].content = "⚠️ 此条留言因违规已被 AI Agent 执行无锁原子抹除。";
+                            success_count++;
+                            LOG_WARN << "🛡️ [AI Agent]: 成功对 seq:" << seq << " 执行原子擦除。";
+                        }
+                    }
+                    action_taken = "BATCH_ERASED_" + std::to_string(success_count);
+                } else {
+                    action_taken = "NO_VALID_TARGETS";
+                }
+            }
+        } catch (const json::parse_error& e) {
+            // 降级兜底：如果 Agent 没发纯正 JSON，尝试旧版的纯文本提取兼容 (比如 "block_seq:30")
+            // 保证系统可用性，防止 Agent 断连
+            std::string cmd = req.body;
+            if (cmd.rfind("block_seq:", 0) == 0 || cmd.rfind("block_seq=", 0) == 0) {
+                try {
+                    uint64_t seq = std::stoull(cmd.substr(10));
+                    size_t index = seq % MAX_MEM_COMMENTS;
+                    if (g_comment_ring_buffer[index].sequence == seq + 1) {
+                        g_comment_ring_buffer[index].nickname = "[AI 已拦截]";
+                        g_comment_ring_buffer[index].content = "⚠️ [旧版协议] 已抹除。";
+                        action_taken = "LEGACY_COMMENT_ERASED";
+                    } else action_taken = "COMMENT_VERSION_MISMATCH";
+                } catch (...) { action_taken = "PARSE_ERROR"; }
+            } else {
                 action_taken = "PARSE_ERROR";
-                LOG_ERROR << "❌ [HttpHandler]: 解析 Agent 序列号失败: " << e.what();
+                LOG_ERROR << "❌ [HttpHandler]: 非法协议包, Payload: " << req.body;
             }
         }
 
         // 2. 回喷标准的执行状态确认帧给 Agent
-        std::stringstream json_ss;
-        json_ss << "{\n";
-        json_ss << "  \"status\": \"SUCCESS\",\n";
-        json_ss << "  \"action\": \"" << action_taken << "\"\n";
-        json_ss << "}";
-        
-        body = json_ss.str();
+        json resp;
+        resp["status"] = (action_taken == "PARSE_ERROR") ? "ERROR" : "SUCCESS";
+        resp["action"] = action_taken;
+        body = resp.dump();
     }
     // ==========================================
     // 分支 G：万能静态文件托管引擎（磁盘文件映射）
     // ==========================================
     else {
-        // 1. 定位物理文件路径，防止路径穿越攻击，默认根路由指向 index.html
-        std::string target_path = "./www" + req.path;
-        if (req.path == "/") {
-            target_path = "./www/index.html";
-        }
+        // 物理阻断路径穿越攻击
+        if (req.path.find("..") != std::string::npos) {
+            status_line = "HTTP/1.1 403 Forbidden\r\n";
+            content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
+            body = "{\"error\":\"[网关物理拦截]: 检测到非法路径穿越尝试！已将您的 IP 记录在案。\"}";
+            LOG_WARN << "🚨 [安全拦截]: 拒绝访问非法路径 -> " << req.path;
+        } else {
+            // 1. 定位物理文件路径，默认根路由指向 index.html
+            std::string target_path = "./www" + req.path;
+            if (req.path == "/") {
+                target_path = "./www/index.html";
+            }
 
-        // 2. 以二进制流的形式跨越硬件磁盘读取资源
-        std::ifstream file(target_path, std::ios::binary);
-        if (file.is_open()) {
-            std::stringstream file_ss;
-            file_ss << file.rdbuf();
-            body = file_ss.str();
-            file.close();
+            // 2. 以二进制流的形式跨越硬件磁盘读取资源
+            std::ifstream file(target_path, std::ios::binary);
+            if (file.is_open()) {
+                std::stringstream file_ss;
+                file_ss << file.rdbuf();
+                body = file_ss.str();
+                file.close();
 
-            // 3. 动态识别文件后缀，精确判定 Content-Type 保证网页皮肤和特效不丢失
-            content_type = "Content-Type: " + GetMimeType(target_path) + "\r\n";
-        } 
-        // 4. 磁盘上挖不出这个文件 -> 优雅下行，降级回喷 404
-        else {
-            status_line = "HTTP/1.1 404 Not Found\r\n";
-            content_type = "Content-Type: " + GetMimeType(".html") + "\r\n";
-            body = "<html><head><title>404</title></head>"
-                   "<body style='background:#111; color:#ff3333; font-family:monospace; padding:50px;'>"
-                   "<h1>🚨 [Mini-Reactor 报错]: 404 资源未找到！</h1>"
-                   "<p>物理磁盘路径不存在: " + target_path + "</p>"
-                   "</body></html>";
+                // 3. 动态识别文件后缀，精确判定 Content-Type 保证网页皮肤和特效不丢失
+                content_type = "Content-Type: " + GetMimeType(target_path) + "\r\n";
+            } 
+            // 4. 磁盘上挖不出这个文件 -> 优雅下行，降级回喷 404
+            else {
+                status_line = "HTTP/1.1 404 Not Found\r\n";
+                content_type = "Content-Type: " + GetMimeType(".html") + "\r\n";
+                body = "<html><head><title>404</title></head>"
+                    "<body style='background:#111; color:#ff3333; font-family:monospace; padding:50px;'>"
+                    "<h1>🚨 [Mini-Reactor 报错]: 404 资源未找到！</h1>"
+                    "<p>物理磁盘路径不存在: " + target_path + "</p>"
+                    "</body></html>";
+            }
         }
     }
 

@@ -185,21 +185,21 @@
             activeWorkers++;
             
             // 每个线程在内存中维持的最大未完成请求飞掠窗口（防止浏览器内存溢出）
-            const MAX_FLIGHT_REQUESTS = 15; 
+            const MAX_FLIGHT_REQUESTS = 8; 
             let inFlight = 0;
 
             try {
                 while (isBlasting) {
                     if (inFlight >= MAX_FLIGHT_REQUESTS) {
-                        // 窗口满了，让出 CPU 时间片，物理等待 4 毫秒再探测
-                        await new Promise(resolve => setTimeout(resolve, 4));
+                        // 窗口满了，让出 CPU 时间片，物理等待 8 毫秒再探测
+                        await new Promise(resolve => setTimeout(resolve, 8));
                         continue;
                     }
 
                     inFlight++;
                     const startTime = performance.now();
 
-                    // 🌟 核心改动：不使用 await 阻断，直接发射 Promise 裸奔
+                    // 不使用 await 阻断，直接发射 Promise 裸奔
                     fetch(targetUrl, { method: 'GET', mode: 'cors', cache: 'no-store' })
                         .then(res => {
                             inFlight--;
@@ -210,12 +210,12 @@
                                 latencyCount++;
                             }
                         })
-                        .catch(err => {
+                        .catch(() => {
                             inFlight--; // 发生网络溢出异常也安全释放窗口
                         });
 
-                    // 物理微调：给浏览器单线程事件循环留出 1 毫秒呼吸机会，防止网页彻底假死
-                    await new Promise(resolve => setTimeout(resolve, 1));
+                    // 物理微调：给浏览器单线程事件循环留出 3 毫秒呼吸机会，防止网页彻底假死
+                    await new Promise(resolve => setTimeout(resolve, 3));
                 }
             } finally {
                  if (activeWorkers > 0) activeWorkers--;
@@ -290,7 +290,10 @@
         // ==========================================
         function refreshMonitor() {
             fetch('/api/monitor')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) throw new Error("HTTP_GATEWAY_ERROR");
+                    return response.json();
+                })
                 .then(data => {
                     // 处于冷却模式，亮起红灯警报
                     const badge = document.getElementById('status-badge');
@@ -307,7 +310,7 @@
                     document.getElementById('engine-val').innerText = data.engine;
 
                     // 1. 提取并核算真实的瞬时压力差
-                    const currentTotal = data.total_request || 0;
+                    const currentTotal = data.total_requests || 0;
                     if (isFirstHeartbeat) {
                         lastTotalRequests = currentTotal;
                         isFirstHeartbeat = false;
@@ -383,8 +386,16 @@
                     fetchComments();
                 })
                 .catch(err => {
-                    document.getElementById('status-badge').innerText = 'OFFLINE';
-                    document.getElementById('status-badge').style.background = '#ff3333';
+                    const badge = document.getElementById('status-badge');
+                    if (isBlasting) {
+                        badge.innerText = "🚨 HIGH LOAD / AI CIRCUIT BREAKER (熔断中)";
+                        badge.style.background = "#ffaa00";
+                        badge.style.color = "#000";
+                    } else {
+                        badge.innerText = 'OFFLINE';
+                        badge.style.background = '#ff3333';
+                        badge.style.color = '#fff';
+                    }
                 });
         }
         
@@ -429,16 +440,21 @@
                 },
                 body: params.toString()
             })
-            .then(res => res.json())
+            .then(res => {
+                // 强行捕获返回包中的 JSON 格式（不论是成功还是 ERROR 的业务响应）
+                return res.json().catch(() => {
+                    throw new Error("SERVER_JSON_PARSE_FAILED");
+                });
+            })
             .then(data => {
                 if(data.result === "SUCCESS" || data.status === "SUCCESS") {
                     document.getElementById('content').value = ''; // 清空输入框
                     setTimeout(fetchComments, 50);
                 } else {
-                    alert('后端报错: ' + data.msg);
+                    alert('⚠️ 核心降级拦截反馈:\n\n ' + data.msg);
                 }
             }).catch(err => {
-                alert('网络发射失败，请检查 C++ 服务器状态');
+                alert('❌ 网络发射失败，C++ 网关由于物理高并发过载已完全挂起或崩溃！');
             });
         }
     </script>

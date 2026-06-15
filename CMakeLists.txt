@@ -15,13 +15,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2 -pthread")
 # ============================================================================
 # 包含网络框架的头文件（让你可以自由地 #include "reactor/net/TcpServer.h" 等）
 include_directories(${PROJECT_SOURCE_DIR}/include)
-# 🌟 新增：包含 app 目录本身（允许 app/main.cpp 爽快直观地 #include "HttpHandler.h"）
+# 包含 app 目录本身（允许 app/main.cpp 爽快直观地 #include "HttpHandler.h"）
 include_directories(${PROJECT_SOURCE_DIR}/app)
 
 # ============================================================================
 # 3. 编译框架层（编译为静态库 libreactor.a）
 # ============================================================================
-# 🌟 核心改动：物理隔离，这里只搜集 src/ 目录下的框架源文件，杜绝将业务搅和进来
+# 物理隔离，这里只搜集 src/ 目录下的框架源文件，杜绝将业务搅和进来
 file(GLOB_RECURSE FRAMEWORK_SOURCES "${PROJECT_SOURCE_DIR}/src/*.cpp")
 
 # 排除可能干扰构建的过时单线程测试入口
@@ -33,7 +33,7 @@ add_library(reactor STATIC ${FRAMEWORK_SOURCES})
 # ============================================================================
 # 4. 编译业务应用层（构建最终的可执行 Web 服务器）
 # ============================================================================
-# 🌟 核心改动：明确搜集且仅搜集 app/ 目录下的所有业务源码（main.cpp, HttpHandler.cpp）
+# 明确搜集且仅搜集 app/ 目录下的所有业务源码（main.cpp, HttpHandler.cpp）
 file(GLOB_RECURSE APP_SOURCES "${PROJECT_SOURCE_DIR}/app/*.cpp")
 
 # 定义你的最终交付应用目标（这里我们更名为更有应用标识度的 web_server）
@@ -42,7 +42,7 @@ add_executable(web_server ${APP_SOURCES})
 # ============================================================================
 # 5. 依赖纽带链接
 # ============================================================================
-# 🌟 核心链接：让业务程序 web_server 强力链接刚刚打好的框架库 reactor 以及操作系统的 pthread 库
+# 让业务程序 web_server 强力链接刚刚打好的框架库 reactor 以及操作系统的 pthread 库
 target_link_libraries(web_server PRIVATE reactor pthread)
 
 # ============================================================================

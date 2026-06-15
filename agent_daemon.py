@@ -24,6 +24,11 @@ def run_agent_guard_loop():
     print("📡 [AI Agent]: 正在死循环常驻后台，密切守望 C++ Reactor 核心...")
     print("========================================================")
 
+    # 记录上次处理完的最大留言序列号，初始值为 -1
+    last_processed_seq = -1
+    # 记录上次拉取时的历史累计总请求数，用于物理对账计算瞬时高并发
+    last_total_requests = 0
+
     while True:
         try:
             # ────────────────────────────────────────────────────────
@@ -46,15 +51,41 @@ def run_agent_guard_loop():
             metrics = system_data.get("metrics", {})
             comments = system_data.get("comments", {})
 
+            # 通过前后两次快照差计算真实并发
+            current_total_requests = metrics.get("total_requests", 0)
+            instant_pulse_requests = current_total_requests - last_total_requests
+            if instant_pulse_requests < 0:
+                instant_pulse_requests = 0
+            last_total_requests = current_total_requests
+
+            # 设定一个并发洪峰阈值：3秒周期内如果累计涌入超过 150 个请求，即断定遭遇高并发
+            is_high_concurrency = instant_pulse_requests > 500
+            
+            # 新旧评论号对比
+            current_sequence = metrics.get('current_sequence', 0)
+            has_new_comments = current_sequence > last_processed_seq
+
             # ────────────────────────────────────────────────────────
             # 🧠 动作二：构建结构化 Prompt，进行严苛的智慧风控审计
             # ────────────────────────────────────────────────────────
-            # 只有当内存中真正有留言时，才去撞击大模型，最大化节省 Token
-            if comments:
+            # 唯有当【有新评论进来】或者【大盘遭遇高并发洪峰冲击】时，才放行给大模型
+            if comments and (has_new_comments or is_high_concurrency):
+
+                # 打印当前唤醒大模型的真实运维上下文
+                if has_new_comments:
+                    print(f"📡 [AI 审计]: 检测到增量新评论入场 (序列号变化: {last_processed_seq} -> {current_sequence})")
+                if is_high_concurrency:
+                    print(f"🚨 [AI 预警]: 大盘遭遇高并发脉冲轰炸！(当前3秒周期内净增请求: {instant_pulse_requests} 次)")
+
+                # 一旦放行进入大模型审计，立刻将当前的序列号同步锁死
+                last_processed_seq = current_sequence
+
+                # 构建 Prompt
                 prompt = f"""
                 [系统核心监控快照]
-                - 总请求累计量: {metrics.get('total_requests', 0)}
-                - 留言板当前最大序列号: {metrics.get('current_sequence', 0)}
+                - 总请求累计量: {current_total_requests}
+                - 留言板当前最大序列号:{current_sequence}
+                - 当前瞬时并发冲量(3s内): {instant_pulse_requests}
                 
                 [待审计的最新内存留言列表]
                 {json.dumps(comments, ensure_ascii=False, indent=2)}
@@ -66,7 +97,7 @@ def run_agent_guard_loop():
                 请严格按照以下 JSON 格式进行回答，不要吐出任何多余的废话和 markdown 标记（如 ```json）：
                 {{
                   "has_violation": true/false,
-                  "target_seq": 违规留言的 'seq' 数字(若无违规内容则为 -1),
+                  "target_seq": [10, 15],  // 👈 必须是数组！列出所有违规留言的 seq 数字，若无违规则为空数组 []
                   "reason": "你的中文诊断意见（限制在30字内）"
                 }}
                 """
@@ -105,16 +136,26 @@ def run_agent_guard_loop():
                 # ────────────────────────────────────────────────────────
                 # 🛡️ 动作三：如果大模型亮起红灯，Agent 立刻发起反向原子擦除
                 # ────────────────────────────────────────────────────────
-                if ai_decision.get("has_violation") and ai_decision.get("target_seq", -1) != -1:
-                    violate_seq = ai_decision.get("target_seq")
-                    print(f"🚨 [AI 警报]: 检测到恶性违规留言！立刻对 seq:{violate_seq} 发起反向重写拦截！")
+                if ai_decision.get("has_violation"):
+                    # 优先获取数组，如果大模型犯傻给了老的单数格式，做一下降级兼容
+                    target_seqs = ai_decision.get("target_seqs", [])
+                    if not target_seqs and ai_decision.get("target_seq", -1) != -1:
+                        target_seqs = [ai_decision.get("target_seq")]
 
-                    # 拼装反向控制协议载荷, 通知 C++ 后台处理
-                    control_url = f"{CPP_SERVER_CUL}/api/agent/control"
-                    control_payload = {"block_seq": violate_seq}
+                    # 删除 -1 无效数据
+                    valid_seqs = [seq for seq in target_seqs if seq != -1]
 
-                    control_res = requests.post(control_url, data=control_payload, timeout=2)
-                    print(f"🎛️ [C++ 核心原子反馈]: {control_res.text}")
+                    if valid_seqs:
+                        print(f"🚨 [AI 警报]: 准备对序列号 {valid_seqs} 发起饱和式批量拦截！")
+
+                        control_url = f"{CPP_SERVER_CUL}/api/agent/control"
+                        control_payload = {"block_seqs": valid_seqs}
+
+                        try:
+                            control_response = requests.post(control_url, json=control_payload, timeout=2)
+                            print(f"🎛️ [C++ 批量擦除反馈]: {control_response.text.strip()}")
+                        except Exception as comm_err:
+                            print(f"❌ [反向控制通信坠毁]: {comm_err}")
             else:
                 # 内存池干净空无一物，AI 默默守护看盘
                 print(f"📊 [AI 动态诊断波形]: 当前内存留言池纯净。网关请求累计量: {metrics.get('total_requests', 0)}")
