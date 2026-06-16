@@ -18,7 +18,7 @@
         textarea { resize: none; }
         button.submit-btn { background: #00ff66; color: #000; border: none; padding: 12px 20px; font-weight: bold; cursor: pointer; font-family: monospace; font-size: 16px; width: 100%; border-radius: 4px; transition: 0.2s; }
         button.submit-btn:hover { background: #fff; box-shadow: 0 0 10px rgba(255,255,255,0.5); }
-        .comment-list { background: #16161f; border: 1px dashed #333; padding: 15px; margin-top: 15px; max-height: 200px; overflow-y: auto; border-radius: 4px; }
+        .comment-list { background: #16161f; border: 1px dashed #333; padding: 15px; margin-top: 15px; max-height: 200px; overflow-y: auto; border-radius: 4px; overscroll-behavior-y: contain; }
         .comment-item { border-bottom: 1px solid #222; padding: 8px 0; font-size: 14px; color: #aaa; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -403,6 +403,7 @@
         setInterval(refreshMonitor, 1000);
         refreshMonitor();
 
+        let lastCommentsStr = "";
         // 异步 B : 拉取历史留言 (GET)
         function fetchComments() {
             fetch('/api/comment?_t=' + Date.now())
@@ -410,13 +411,26 @@
                 .then(data => {
                     const container = document.getElementById('comment-container');
                     if(data.length === 0) { container.innerHTML = "暂无留言，快来抢沙发！"; return; }
+                    
+                    // 数据比对。如果数据没有变化，直接 return，阻止无意义的 DOM 重绘
+                    const currentDataStr = JSON.stringify(data);
+                    if(currentDataStr === lastCommentsStr) { return; }
+                    lastCommentsStr = currentDataStr;
+
+                    // 记录渲染前的滚动状态
+                    const currentScrollTop = container.scrollTop;
+                    const isAtBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 30;
                     container.innerHTML = data.map(item => `
                         <div class="comment-item" style="border-bottom: 1px dashed #222; padding: 10px 0; font-size: 14px; line-height: 1.5;">
                             <span style="color: #00ff66; font-weight: bold; text-shadow: 0 0 5px rgba(0,255,102,0.3);">✦ [${item.nick}]</span> 
                             <span style="color: #aaa; margin-left: 8px;">${item.text}</span>
                         </div>
                     `).join('');
-                    container.scrollTop = container.scrollHeight;
+                    if (isAtBottom) {
+                        container.scrollTop = container.scrollHeight;
+                    } else {
+                        container.scrollTop = currentScrollTop;
+                    }
                 });
         }
         fetchComments();

@@ -338,7 +338,17 @@ void HandleHttpRequest(const std::shared_ptr<reactor::net::TcpConnection>& conn,
                 // 兼容最新版的数组批量发送格式: {"block_seqs": [10, 15]}
                 if (payload.contains("block_seqs") && payload["block_seqs"].is_array()) {
                     for (const auto& item : payload["block_seqs"]) {
-                        if (item.is_number()) targets.push_back(item.get<uint64_t>());
+                        // 强校验：不仅要是数字，还必须能无损地塞进 uint64_t（防止大数溢出截断）
+                        if (item.is_number_unsigned()) { 
+                            uint64_t raw_val = item.get<uint64_t>();
+                            
+                            // 可选高危防御：如果数字大得离谱（比如大于当前系统产生过的最大 sequence），直接判定非法
+                            if (raw_val < g_comment_sequence.load(std::memory_order_relaxed) + 100) {
+                                targets.push_back(raw_val);
+                            } else {
+                                LOG_WARN << "⚠️ [AI Agent Control]: 拒绝了超大幻觉序列号: " << raw_val;
+                            }
+                        }
                     }
                 }
                 // 兼容单数发送格式: {"block_seq": 10}

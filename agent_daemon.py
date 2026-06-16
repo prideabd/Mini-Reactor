@@ -97,7 +97,7 @@ def run_agent_guard_loop():
                 请严格按照以下 JSON 格式进行回答，不要吐出任何多余的废话和 markdown 标记（如 ```json）：
                 {{
                   "has_violation": true/false,
-                  "target_seq": [10, 15],  // 👈 必须是数组！列出所有违规留言的 seq 数字，若无违规则为空数组 []
+                  "target_seqs": [10, 15],  // 👈 必须是数组！列出所有违规留言的 seq 数字，若无违规则为空数组 []
                   "reason": "你的中文诊断意见（限制在30字内）"
                 }}
                 """
@@ -139,11 +139,18 @@ def run_agent_guard_loop():
                 if ai_decision.get("has_violation"):
                     # 优先获取数组，如果大模型犯傻给了老的单数格式，做一下降级兼容
                     target_seqs = ai_decision.get("target_seqs", [])
-                    if not target_seqs and ai_decision.get("target_seq", -1) != -1:
-                        target_seqs = [ai_decision.get("target_seq")]
+
+                    # 降级兼容：如果大模型死活只吐 target_seq 字段
+                    if not target_seqs and "target_seq" in ai_decision:
+                        val = ai_decision.get("target_seq")
+                        # 如果吐出来的已经是列表，直接用；如果是单个数字，套成列表
+                        if isinstance(val, list):
+                            target_seqs = val
+                        elif val != -1:
+                            target_seqs = [val]
 
                     # 删除 -1 无效数据
-                    valid_seqs = [seq for seq in target_seqs if seq != -1]
+                    valid_seqs = [seq for seq in target_seqs if isinstance(seq, int) and seq != -1]
 
                     if valid_seqs:
                         print(f"🚨 [AI 警报]: 准备对序列号 {valid_seqs} 发起饱和式批量拦截！")
