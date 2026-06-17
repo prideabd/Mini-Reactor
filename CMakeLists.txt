@@ -13,9 +13,9 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2 -pthread")
 # ============================================================================
 # 2. 头文件搜索路径配置
 # ============================================================================
-# 包含网络框架的头文件（让你可以自由地 #include "reactor/net/TcpServer.h" 等）
+# 包含网络框架的头文件
 include_directories(${PROJECT_SOURCE_DIR}/include)
-# 包含 app 目录本身（允许 app/main.cpp 爽快直观地 #include "HttpHandler.h"）
+# 包含 app 目录本身
 include_directories(${PROJECT_SOURCE_DIR}/app)
 
 # ============================================================================
@@ -33,8 +33,14 @@ add_library(reactor STATIC ${FRAMEWORK_SOURCES})
 # ============================================================================
 # 4. 编译业务应用层（构建最终的可执行 Web 服务器）
 # ============================================================================
-# 明确搜集且仅搜集 app/ 目录下的所有业务源码（main.cpp, HttpHandler.cpp）
-file(GLOB_RECURSE APP_SOURCES "${PROJECT_SOURCE_DIR}/app/*.cpp")
+# 显式罗列各业务分层源码，实现物理资产的精准控制与追踪
+set(APP_SOURCES
+    ${PROJECT_SOURCE_DIR}/app/main.cpp
+    ${PROJECT_SOURCE_DIR}/app/dispatcher/HttpDispatcher.cpp
+    ${PROJECT_SOURCE_DIR}/app/daemons/SysMetricsDaemon.cpp
+    ${PROJECT_SOURCE_DIR}/app/repository/CommentRepository.cpp
+    ${PROJECT_SOURCE_DIR}/app/common/AppUtils.cpp
+)
 
 # 定义你的最终交付应用目标（这里我们更名为更有应用标识度的 web_server）
 add_executable(web_server ${APP_SOURCES})

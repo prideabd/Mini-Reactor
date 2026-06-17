@@ -10,7 +10,8 @@
 
 #include "reactor/http/HttpServer.h"
 #include "reactor/http/HttpCodec.h"
-#include "HttpHandler.h"
+#include "dispatcher/HttpDispatcher.h"
+#include "daemons/SysMetricsDaemon.h"
 
 using namespace reactor::net;
 using namespace reactor::http;
@@ -58,6 +59,9 @@ int main() {
     // 开启后端日志写入线程
     log.Start();
 
+    // 启动异步线程获取 CPU 等指标
+    app::SysMetricsDaemon::Start();
+
     {
         // --- 2. 服务器网络引擎初始化 ---
         // 实例化主反应堆（只负责管理 Acceptor 的连接接收事件）
@@ -65,7 +69,7 @@ int main() {
         // 实例化高性能总服务器类 (监听 8080 端口, 3个 Sub-Reactor 子线程)
         HttpServer server(&main_loop, 8080, 3);
 
-        server.SetHttpCallback(app::HandleHttpRequest);
+        server.SetHttpCallback(app::HttpDispatcher::Dispatch);
 
         // 启动服务器
         server.Start();

@@ -11,6 +11,31 @@
         .card { background: #16161f; border: 1px solid #333; padding: 20px; width: 45%; text-align: center; border-radius: 4px; }
         .value { font-size: 42px; font-weight: bold; color: #ffffff; margin-top: 10px; }
         .badge { background: #00ff66; color: #000; padding: 4px 8px; font-weight: bold; font-size: 14px; border-radius: 3px; }
+        
+        /* AI 自动化终端样式 */
+        .agent-panel { margin-top: 25px; border: 2px solid #00ffcc; background: #0a0a0f; padding: 20px; border-radius: 8px; box-shadow: 0 0 20px rgba(0, 255, 204, 0.1); box-sizing: border-box; transition: all 0.5s ease; }
+        .panel-header { display: flex; align-items: center; font-size: 13px; font-weight: bold; color: #00ffcc; border-bottom: 1px dashed #222; padding-bottom: 10px; margin-bottom: 15px; }
+        .pulse-dot { width: 9px; height: 9px; background-color: #00ff66; border-radius: 50%; margin-right: 10px; box-shadow: 0 0 10px #00ff66; animation: heart-beat 1.5s infinite; }
+        @keyframes heart-beat { 0% { transform: scale(0.9); opacity: 0.6; } 50% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 15px #00ff66; } 100% { transform: scale(0.9); opacity: 0.6; } }
+        /* 🚨 智能防御动作滚动灯带 */
+        .alarm-light-bar { background: #07070a; border: 1px solid #222; padding: 10px; border-radius: 4px; margin-bottom: 15px; overflow: hidden; white-space: nowrap; box-sizing: border-box; transition: all 0.3s ease; }
+        .alarm-text { font-size: 14px; font-weight: bold; color: #00ffcc; display: inline-block; }
+        /* 🔥 拦截/过载时的全屏与面板霓虹暴闪突变 */
+        .panic-box-neon { border-color: #ff0055 !important; box-shadow: 0 0 35px rgba(255, 0, 85, 0.3) !important; }
+        .panic-mode { border-color: #ff0055 !important; box-shadow: 0 0 25px rgba(255, 0, 85, 0.25) !important; }
+        .panic-mode .panel-header { color: #ff0055 !important; }
+        /* 警报激活：黄红交替物理闪烁动画 */
+        .alarm-active { animation: neon-alarm-flash 0.8s infinite alternate; }
+        .alarm-active .alarm-text { display: inline-block; padding-left: 100%; animation: text-marquee 12s linear infinite; }
+        @keyframes neon-alarm-flash { 0% { background-color: rgba(255, 0, 85, 0.2); border-color: #ff0055; box-shadow: inset 0 0 15px rgba(255, 0, 85, 0.3); } 100% { background-color: rgba(255, 170, 0, 0.25); border-color: #ffaa00; box-shadow: inset 0 0 20px rgba(255, 170, 0, 0.3); } }
+        @keyframes text-marquee { 0% { transform: translate3d(0, 0, 0); } 100% { transform: translate3d(-150%, 0, 0); } }
+        /* 💻 黑色命令行控制台 */
+        .cyber-terminal { background: #020205; border: 1px solid #1a1a24; padding: 15px; height: 140px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 13px; color: #00ffcc; line-height: 1.6; border-radius: 4px; box-shadow: inset 0 0 15px rgba(0,0,0,0.9); box-sizing: border-box; }
+        .terminal-title { font-size: 12px; color: #888; margin-bottom: 6px; font-weight: bold; }
+        .terminal-line { margin-bottom: 5px; border-left: 2px solid #00ffcc; padding-left: 8px; }
+        .line-alert { color: #ffaa00; border-left-color: #ffaa00; }
+        .line-panic { color: #ff0055; border-left-color: #ff0055; font-weight: bold; }
+       
         /* 留言板样式 */
         .form-panel { background: #1a1a1a; border: 1px solid #333; padding: 20px; border-radius: 8px; margin-top: 20px; box-sizing: border-box; }
         .form-group { margin: 15px 0; }
@@ -20,11 +45,11 @@
         button.submit-btn:hover { background: #fff; box-shadow: 0 0 10px rgba(255,255,255,0.5); }
         .comment-list { background: #16161f; border: 1px dashed #333; padding: 15px; margin-top: 15px; max-height: 200px; overflow-y: auto; border-radius: 4px; overscroll-behavior-y: contain; }
         .comment-item { border-bottom: 1px solid #222; padding: 8px 0; font-size: 14px; color: #aaa; }
-    </style>
+       </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <div class="box">
+    <div class="box" id="mainCoreWrapper">
         <h1>🚀 MINI-REACTOR CORE ENGINE PANEL</h1>
         <p align="center">引擎运行状态: <span class="badge" id="status-badge">INITIALIZING...</span></p>
 
@@ -109,6 +134,20 @@
             </div>
         </div>
 
+        <div class="agent-panel" id="agentAutonomousTerminal">
+            <div class="panel-header">
+                <span class="pulse-dot" id="agentStatusDot"></span>
+                <span>⚡ AI AGENT 智能运维自治终端 v1.1.0 ── SYSTEM AUTO-PILOT ACTIVE</span>
+            </div>
+
+            <div class="alarm-light-bar" id="alarmLightBar">
+                <div class="alarm-text" id="alarmScrollingText">STATUS: 🟢 SYSTEM RUNNING IN SAFE BOUNDS. NO VIOLATION DETECTED.</div>
+            </div>
+
+            <div class="terminal-title">📊 AI REAL-TIME DIAGNOSTIC REGISTRY (大模型流式诊断审计控制台)</div>
+            <div class="cyber-terminal" id="aiDiagnosticConsole"></div>
+        </div>
+
         <div class="form-panel">
             <h3 style="color: #00ff66; margin-top: 0; font-size: 16px;">💬 引擎测试留言反馈区</h3>
             <div class="form-group">
@@ -136,12 +175,13 @@
         let concurrency = 50;
         let activeWorkers = 0; // 计数器
         let lastTotalRequests = 0;
-        let isFirstHeartbeat = true;
 
-        // 引入低通滤波器的内存状态变量，实现平滑降温过渡动画
-        let smoothedCpu = 2.0;
-        let smoothedMem = 82.3;
-        let smoothedIo = 0.1;
+        // 维护大模型防御器状态
+        let lastTriggeredPanic = false; // 边缘触发器，保证只有第一次触发时运行
+        let logTimer = 0;
+        let globalCooldownMode = false;
+        let lastInterceptCount = 0; // 上一次拦截的消息数量
+        let aiAlertTimerUntil = 0;  
 
         // 滑块联动
         document.getElementById('concurrencyRange').addEventListener('input', (e) => {
@@ -238,7 +278,6 @@
         // 📊 2. 初始化四大全量时序图表阵列
         // ==========================================
         const MAX_DATA_POINTS = 20;
-        const chartLabels = Array(MAX_DATA_POINTS).fill('');
 
         // 微型时序图表生成
         function createMiniChart(canvasId, lineColor, fillColor, maxVal, showGridY = false) {
@@ -246,7 +285,7 @@
             return new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: chartLabels,
+                    labels: Array(MAX_DATA_POINTS).fill(''),
                     datasets: [{
                         data: Array(MAX_DATA_POINTS).fill(0),
                         borderColor: lineColor,
@@ -286,6 +325,102 @@
         const ioChart  = createMiniChart('ioChart', '#ffcc00', 'rgba(255, 204, 0, 0.04)', 50);
 
         // ==========================================
+        // 3. ai 终端输出函数
+        // ==========================================
+        function appendTerminalLogStream(text, type = 'info') {
+            const consoleElement = document.getElementById('aiDiagnosticConsole');
+            if (!consoleElement) return;
+            const now = new Date();
+            const timeStr = `[${now.toTimeString().split(' ')[0]}] `;
+            const line = document.createElement('div');
+            line.className = 'terminal-line';
+            if (type == 'warn') line.classList.add('line-alert');
+            if (type == 'panic') line.classList.add('line-panic');
+            consoleElement.appendChild(line);
+            line.innerText = timeStr;
+
+            let i = 0;
+            function typeChar() {
+                if (i < text.length) {
+                    line.innerText += text.charAt(i);
+                    i++;
+                    consoleElement.scrollTop = consoleElement.scrollHeight;
+                    setTimeout(typeChar, 25);
+                }
+            }
+            typeChar();
+        }
+        // 初始化终端
+        setTimeout(() => {
+            appendTerminalLogStream("核心并网成功。旁路多线程舆情审计门控就绪，常态看盘模式点火完毕。", "info");
+        }, 500);
+
+        // AI Agent 终端控制
+        function syncAgentUIState(commentsData) {
+            const alarmBar = document.getElementById('alarmLightBar');
+            const alarmText = document.getElementById('alarmScrollingText');
+            const mainPanel = document.getElementById('agentAutonomousTerminal');
+            const mainWrapper = document.getElementById('mainCoreWrapper');
+            const agentStatusDot = document.getElementById('agentStatusDot');
+
+            // 1. 统计当前被拦截的数量
+            if (commentsData && Array.isArray(commentsData)) {
+                let currentInterceptCount = commentsData.filter(item => item.nick === "[AI 已拦截]").length;
+                // 如果发现被拦截的数量增加了，说明刚刚发生了一次新的拦截！
+                if (currentInterceptCount > lastInterceptCount) {
+                    aiAlertTimerUntil = Date.now() + 5000;
+                }
+                lastInterceptCount = currentInterceptCount;
+            }
+
+            // 2. 计算当前 AI 暂态警报是否在激活期内
+            let isAiAlertActive = Date.now() < aiAlertTimerUntil;
+            // 拉响防御警报 (系统整体熔断开启 或 刚刚触发了新的AI精准擦除)
+            if (globalCooldownMode || isAiAlertActive) {
+                if (!lastTriggeredPanic) {
+                    mainPanel.classList.add('panic-mode');
+                    mainWrapper.classList.add('panic-box-neon');
+                    alarmBar.classList.add('alarm-active');
+                    agentStatusDot.style.backgroundColor = "#ff0055";
+                    agentStatusDot.style.boxShadow = "0 0 15px #ff0055";
+
+                    if (globalCooldownMode) {
+                        alarmText.innerText = `[🚨 AI ACTION]: CRITICAL OVERLOAD DETECTED! INITIATED EMERGENCY DROP/COOLDOWN MODE!`;
+                        appendTerminalLogStream("⚠️ 警告：系统网络管道遭遇恶性高并发挤压，大模型自主判定启动全局一键级紧急降级熔断！", "panic");
+                    } else {
+                        alarmText.innerText = `[🚨 AI ACTION]: 拦截违规刷屏/恶意人身攻击用户，成功执行内存无锁擦除！`;
+                        appendTerminalLogStream("⚡ 舆情拦截：大模型捕捉到最新敏感词/违规言论，精准下发反向控制指令，执行内存级擦除！", "warn");
+                    }
+                    lastTriggeredPanic = true;
+                }
+            }
+            // 危机卸载/无新异动
+            else {
+                if (lastTriggeredPanic) {
+                    // 8秒倒计时结束且无熔断，平稳卸载警报状态，恢复原有的极客绿
+                    mainPanel.classList.remove('panic-mode');
+                    mainWrapper.classList.remove('panic-box-neon');
+                    alarmBar.classList.remove('alarm-active');
+                    agentStatusDot.style.backgroundColor = "#00ff66";
+                    agentStatusDot.style.boxShadow = "0 0 10px #00ff66";
+                    alarmText.innerText = `STATUS: 🟢 SYSTEM RUNNING IN SAFE BOUNDS. NO VIOLATION DETECTED.`;
+                    appendTerminalLogStream("🟢 暂态警报解除。防御动作安全撤销，系统重新移交旁路常态看盘模式。", "info");
+                    lastTriggeredPanic = false;
+                }
+                logTimer++;
+                if (logTimer % 12 === 0) { 
+                    const mockAiLogs = [
+                        "当前留言板情绪：极客活跃度高，主要讨论底层原子锁问题；系统整体处于健康横盘状态。",
+                        "AI 舆情周报：环形缓冲区整体测序未见明显恶意流量对冲，语境氛围：🟢 积极。",
+                        "监控流对账完成：Reactor 网络并发平稳，大模型深度上下文推理未发现绕过攻击行为。"
+                    ];
+                    const randomSelected = mockAiLogs[Math.floor(Math.random() * mockAiLogs.length)];
+                    appendTerminalLogStream(`📊 AI 实时诊断日志: ${randomSelected}`, "info");
+                }
+            }
+        }
+
+        // ==========================================
         // 📡 A：每秒拉取并精算四大指标
         // ==========================================
         function refreshMonitor() {
@@ -295,9 +430,11 @@
                     return response.json();
                 })
                 .then(data => {
-                    // 处于冷却模式，亮起红灯警报
                     const badge = document.getElementById('status-badge');
-                    if (data.cooldown_mode == true) {
+                    globalCooldownMode = (data.cooldown_mode == true);
+                    syncAgentUIState(null);
+                    // 处于冷却模式，亮起红灯警报
+                    if (globalCooldownMode) {
                         badge.innerText = "🚨 EMERGENCY COOLDOWN (AI 熔断中)";
                         badge.style.background = "#ff3333";
                         badge.style.color = "#fff";
@@ -309,15 +446,10 @@
                     document.getElementById('uptime-val').innerText = data.uptime_seconds + 's';
                     document.getElementById('engine-val').innerText = data.engine;
 
-                    // 1. 提取并核算真实的瞬时压力差
+                    // 1. 直接接收 C++ 后端下发的真实 QPS 与请求总量
                     const currentTotal = data.total_requests || 0;
-                    if (isFirstHeartbeat) {
-                        lastTotalRequests = currentTotal;
-                        isFirstHeartbeat = false;
-                        return;
-                    }
-                    let globalQps = currentTotal - lastTotalRequests;
-                    lastTotalRequests = currentTotal;
+                    let globalQps = data.qps || 0; 
+                    
                     let avgLatency = 0;
                     if (latencyCount > 0) {
                         avgLatency = Math.round(totalLatency / latencyCount);
@@ -325,57 +457,44 @@
                     totalLatency = 0;
                     latencyCount = 0;
 
-                    // 2. ⚡ 模拟前端物理映射计算：随着压力膨胀，模拟服务器资源吃满
-                    let loadRatio = Math.min(globalQps / 200000.0, 1.0);
+                    // 2. 彻底废弃前端模拟映射！直接采纳 C++ 守护进程提供的真实物理数据
+                    // 后端已经做过了 EMA 平滑，所以这里直接用原值
+                    let realCpu = data.cpu_usage || 0.0;
+                    let realMem = data.mem_available || 0.0;
+                    let realIo = data.disk_io || 0.0;
 
-                    // 设定各硬件指标受压时的目标走向
-                    let targetCpu = 2.0 + loadRatio * 85.0;  // 闲置 2%，满载 87%
-                    if (targetCpu > 98.0) targetCpu = 98.4;
-
-                    let targetMem = 82.3 - loadRatio * 15.2; // 闲置 82.3% 剩余，满载由于开辟 Socket 缓冲区缩减
-                    if (targetMem < 12.0) targetMem = 12.1;
-
-                    let targetIo = 0.1 + loadRatio * 45.8;   // 闲置几乎为0，满载时突发大流量磁盘读写吞吐
-
-                    // 3. 🌊 一阶低通滤波器滤波（数学惯性）：让硬件状态像真实的物理世界一样缓慢降温或升温
-                    smoothedCpu = smoothedCpu * 0.4 + targetCpu * 0.6;
-                    smoothedMem = smoothedMem * 0.7 + targetMem * 0.3; // 内存释放带有粘滞阻尼
-                    smoothedIo  = smoothedIo * 0.3 + targetIo * 0.7;   // I/O 对突发流量响应敏锐
-
-                    // 熄火后确保强制回归静默线，不产生视觉幽灵残留值
+                    // 熄火后优化视觉：确保闲置时数据不显零碎，保留一点基础底噪
                     if (!isBlasting && globalQps === 0) {
-                        smoothedCpu = smoothedCpu * 0.5 + 2.0 * 0.5;
-                        smoothedIo = smoothedIo * 0.5 + 0.1 * 0.5;
-                        if (Math.abs(smoothedCpu - 2.0) < 0.5) smoothedCpu = 2.0;
-                        if (Math.abs(smoothedIo - 0.1) < 0.1) smoothedIo = 0.1;
+                        if (realCpu < 2.0) realCpu = 2.0;
+                        if (realIo < 0.1) realIo = 0.1;
                     }
 
-                    // 4. 文字看板像素级更新同步
+                    // 3. 文字看板像素级更新同步
                     document.getElementById('qpsDisplay').innerText = globalQps.toLocaleString();
                     document.getElementById('totalSuccessDisplay').innerText = currentTotal.toLocaleString();
                     document.getElementById('latencyDisplay').innerText = latencyCount > 0 ? (avgLatency + "ms") : "0.1ms";
 
-                    document.getElementById('cpuDisplay').innerText = smoothedCpu.toFixed(1) + "%";
-                    document.getElementById('memDisplay').innerText = smoothedMem.toFixed(1) + "%";
-                    document.getElementById('ioDisplay').innerText = smoothedIo.toFixed(1) + " MB/s";
+                    document.getElementById('cpuDisplay').innerText = realCpu.toFixed(1) + "%";
+                    document.getElementById('memDisplay').innerText = realMem.toFixed(1) + "%";
+                    document.getElementById('ioDisplay').innerText = realIo.toFixed(1) + " MB/s";
 
-                   // 5. 🚀 瀑布式流体时序推进，向 Chart.js 数据管道喂数
+                   // 4. 🚀 瀑布式流体时序推进，向 Chart.js 数据管道喂数
                     const timeStr = new Date().toLocaleTimeString().substr(3, 5);
                     
-                    function pushTimelineData(chart, nextValue) {
+                    function pushTimelineData(chart, nextValue, useAnimation = false) {
                         chart.data.datasets[0].data.push(nextValue);
                         chart.data.labels.push(timeStr);
                         if (chart.data.datasets[0].data.length > MAX_DATA_POINTS) {
                             chart.data.datasets[0].data.shift();
                             chart.data.labels.shift();
                         }
-                        chart.update('none'); // 使用 'none' 极速模式，阻断多图表高频重绘带来的前端 CPU 损耗
+                        chart.update(useAnimation ? undefined : 'none');
                     }
 
                     pushTimelineData(qpsChart, globalQps);
-                    pushTimelineData(cpuChart, smoothedCpu);
-                    pushTimelineData(memChart, smoothedMem);
-                    pushTimelineData(ioChart, smoothedIo);
+                    pushTimelineData(cpuChart, realCpu, true);
+                    pushTimelineData(memChart, realMem, true);
+                    pushTimelineData(ioChart, realIo, true);
                     
                     const qpsDataArr = qpsChart.data.datasets[0].data;
                     const currentMaxQps = Math.max(...qpsDataArr);
@@ -414,7 +533,11 @@
                     
                     // 数据比对。如果数据没有变化，直接 return，阻止无意义的 DOM 重绘
                     const currentDataStr = JSON.stringify(data);
-                    if(currentDataStr === lastCommentsStr) { return; }
+                    if(currentDataStr === lastCommentsStr) { 
+                        syncAgentUIState(data);
+                        return; 
+                    }
+
                     lastCommentsStr = currentDataStr;
 
                     // 记录渲染前的滚动状态
@@ -431,6 +554,7 @@
                     } else {
                         container.scrollTop = currentScrollTop;
                     }
+                    syncAgentUIState(data);
                 });
         }
         fetchComments();
