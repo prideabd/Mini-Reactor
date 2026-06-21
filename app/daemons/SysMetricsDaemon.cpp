@@ -1,5 +1,3 @@
-#include <thread>
-#include <mutex>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -13,6 +11,14 @@
 #include "dispatcher/HttpDispatcher.h"
 
 namespace app {
+
+// ==========================================
+// 静态成员变量显式初始化
+// ==========================================
+std::thread SysMetricsDaemon::m_daemon_thread;
+std::atomic<bool> SysMetricsDaemon::m_running{false};
+std::mutex SysMetricsDaemon::m_mtx;
+std::condition_variable SysMetricsDaemon::m_cv;
 
 // ==========================================
 // 采集服务私有数据与底层结构（完全隐形）
@@ -42,14 +48,19 @@ namespace {
 // 守护进程业务接口具体实现
 // ==========================================
 void SysMetricsDaemon::Start() {
-    // 拉起旁路幽灵线程，并放行（detach）让其常驻
-    std::thread([]() {
-        LOG_INFO << "⚙️ [SysMetricsDaemon]: 后台硬件指标轮询守护线程已成功点火。";
+    // 防止重复启动
+    if (m_running.exchange(true)) {
+        return;
+    }
+    // 拉起线程
+    LOG_INFO << "⚙️ [SysMetricsDaemon]: 后台硬件指标轮询守护线程已成功点火。";
+
+    m_daemon_thread = std::thread([]() {
         CpuTicks last_cpu_ticks{};
         uint64_t last_disk_sectors = 0;
         bool is_first_run = true; // 解决冷启动爬坡与开机数据污染
 
-        while (true) {
+        while (m_running.load(std::memory_order_relaxed)) {
             SysMetricsSnapshot temp_cache;
             temp_cache.is_linux_env = false; // 默认为 false，直至被物理文件自证
             temp_cache.qps = 0;
@@ -92,7 +103,6 @@ void SysMetricsDaemon::Start() {
                 if (total > 0) temp_cache.mem_available = (static_cast<double>(available) / total) * 100.0;
                 mem_file.close();
             }
-
             // 3. 采集 I/O 磁盘报文
             std::ifstream disk_file("/proc/diskstats");
             if (disk_file.is_open()) {
@@ -166,15 +176,33 @@ void SysMetricsDaemon::Start() {
                 }
             }
 
-            // 严格的 1 秒钟时代步长轮询
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            std::unique_lock<std::mutex> cv_lock(m_mtx);
+            m_cv.wait_for(cv_lock, std::chrono::seconds(1), [] {
+                return !m_running.load(std::memory_order_relaxed);
+            });
         }
-    }).detach();
+        LOG_INFO << "⚙️ [SysMetricsDaemon]: 收到停机指令，指标采集循环已安全终止。";
+    });
+}
+
+void SysMetricsDaemon::Stop() {
+    if (m_running.exchange(false)) {
+        // 1. 发送唤醒信号
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            m_cv.notify_one();
+        }
+        // 2. 等待后台线程执行完毕
+        if (m_daemon_thread.joinable()) {
+            m_daemon_thread.join();
+        }
+        LOG_INFO << "✅ [SysMetricsDaemon]: 后台守护进程已彻底回收释放。";
+    }
 }
 
 SysMetricsSnapshot SysMetricsDaemon::GetMetrics() {
     std::lock_guard<std::mutex> lock(g_metrics_mtx);
-    return g_cached_metrics;;
+    return g_cached_metrics;
 }
 
 } // namespace app

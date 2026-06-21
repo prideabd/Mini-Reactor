@@ -89,6 +89,10 @@ bool CommentRepository::Initialize(const std::string& db_path) {
 }
 
 void CommentRepository::Shutdown() {
+     // 线程未启动则直接跳过，避免对未 init 的对象操作
+    if (!m_worker_thread.joinable() && m_db == nullptr) {
+        return;
+    }
     // 停止信号并唤醒后台线程
     m_stop_requested = true;
     m_queue_cv.notify_one();

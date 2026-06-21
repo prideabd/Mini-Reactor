@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 namespace app {
 
@@ -24,7 +28,17 @@ public:
     // 独立线程启动
     static void Start();
 
+    // 终止线程
+    static void Stop();
+
     // 获取物理指标
     static SysMetricsSnapshot GetMetrics();
+
+private:
+    static std::thread m_daemon_thread;
+    static std::atomic<bool> m_running;
+
+    static std::mutex m_mtx;
+    static std::condition_variable m_cv;
 };
 } // namespace app

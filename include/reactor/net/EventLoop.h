@@ -1,5 +1,5 @@
 #ifndef EVENT_LOOP_H
-#define EVENT_LOOP
+#define EVENT_LOOP_H
 
 /**
  * @file EventLoop.h
@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <memory>
 #include <thread>
+#include <atomic>
 
 namespace reactor::net {
 
@@ -23,7 +24,8 @@ public:
 
     void Loop();   // 启动 epoll 循环
     void Wakeup(); // 跨线程唤醒主线程
-    void Quit() { quit_ = true; }
+    void Quit();   // 终止信号
+    void QuitFromSignal(); // 不带输出日志的终止版本
 
     // 给 Channel 提供的 epoll 树控制接口
     void UpdateChannel(Channel* channel);
@@ -44,7 +46,7 @@ private:
 
     int epoll_fd_;      // epoll (红黑树）索引
     int wakeup_fd_;    // 内核事件通知描述符
-    bool quit_; 
+    std::atomic<bool> quit_; 
     std::vector<struct epoll_event> events_;
     std::unique_ptr<Channel> wakeup_channel_;
     std::vector<Functor> pending_functors_;

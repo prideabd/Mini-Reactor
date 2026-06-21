@@ -1,6 +1,7 @@
 #include <fstream>
 #include <iostream>
 #include <filesystem>
+#include <mutex>
 
 #include "BlacklistManager.h"
 #include "reactor/log/Logger.h"

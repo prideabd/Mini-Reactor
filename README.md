@@ -1,3 +1,6 @@
+
+---
+
 ```
 Mini-Reactor
 ├─ .devcontainer
@@ -18,12 +21,13 @@ Mini-Reactor
 │  │  └─ HttpDispatcher.h
 │  ├─ main.cpp
 │  ├─ repository
+│  │  ├─ BlacklistManager.cpp
+│  │  ├─ BlacklistManager.h
 │  │  ├─ CommentRepository.cpp
 │  │  └─ CommentRepository.h
 │  └─ single_thread_main.cpp
+├─ config
 ├─ include
-│  ├─ nlohmann
-│  │  └─ json.hpp
 │  └─ reactor
 │     ├─ base
 │     │  └─ ThreadPool.h
@@ -62,12 +66,19 @@ Mini-Reactor
 │     ├─ EventLoopThreadPool.cpp
 │     ├─ TcpConnection.cpp
 │     └─ TcpServer.cpp
+├─ third_party
+│  ├─ nlohmann
+│  │  └─ json.hpp
+│  └─ sqlite
+│     ├─ sqlite3.c
+│     └─ sqlite3.h
 ├─ www
 │  └─ index.html
 ├─ 下一阶段需求
 └─ 小结
    ├─ Mini-Reactor需求文档
    ├─ 回调机制.md
+   ├─ 学习小卡片.md
    ├─ 整体流程
    ├─ 阶段一小结.md
    ├─ 阶段七小结.md
@@ -79,7 +90,7 @@ Mini-Reactor
    └─ 阶段四小结.md
 
 ```
-
+---
 
 
 ### 🚀 Mini-Reactor 项目简介
@@ -105,7 +116,5 @@ Mini-Reactor
 * 支持 **CMake** 一键跨平台构建。
 * 配置了 **DevContainers** (`.devcontainer`)，保障了开发环境的高度一致性与开箱即用。
 * 配套了丰富的基础前端看板 (`www/index.html`) 与外部监控/AI 控制脚本 (`agent_daemon.py`)。
-
-
 
 ---

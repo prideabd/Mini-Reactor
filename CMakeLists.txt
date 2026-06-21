@@ -41,12 +41,22 @@ set(APP_SOURCES
     ${PROJECT_SOURCE_DIR}/app/dispatcher/HttpDispatcher.cpp
     ${PROJECT_SOURCE_DIR}/app/daemons/SysMetricsDaemon.cpp
     ${PROJECT_SOURCE_DIR}/app/repository/CommentRepository.cpp
+    ${PROJECT_SOURCE_DIR}/app/repository/BlacklistManager.cpp
     ${PROJECT_SOURCE_DIR}/app/common/AppUtils.cpp
     ${PROJECT_SOURCE_DIR}/third_party/sqlite/sqlite3.c
 )
 
 # 定义你的最终交付应用目标（这里我们更名为更有应用标识度的 web_server）
 add_executable(web_server ${APP_SOURCES})
+
+# 每次构建后，自动把 config 与 www 同步到可执行文件所在目录
+add_custom_command(TARGET web_server POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:web_server>/config
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/www $<TARGET_FILE_DIR:web_server>/www
+    COMMENT "🔄 同步 config 与 www 资源到可执行文件目录"
+)
 
 # ============================================================================
 # 5. 依赖纽带链接

@@ -61,9 +61,9 @@ private:
     void HandleWrite(); // 底层驱动写：output_buffer_ -> 内核
     void HandleClose(); // 底层驱动关闭 -> 叫醒 TcpServer 清理 Map
 
-    StateE state_;
     EventLoop* loop_;
     int conn_fd_;
+    StateE state_;
     std::any context_;
 
     std::unique_ptr<Channel> channel_;

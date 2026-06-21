@@ -34,17 +34,10 @@ EventLoop::EventLoop()
         LOG_FATAL << "EventLoop: eventfd 创建失败, errno = " << errno;
     }
 
-    // 3. 将 wakeup_fd_  注册到 epoll 树上进行监听
+    // 3. 将 wakeup_fd_ 注册到 epoll 树上进行监听
     wakeup_channel_ = std::make_unique<Channel>(this, wakeup_fd_);
     wakeup_channel_->SetReadCallback(std::bind(&EventLoop::HandleRead, this));
     wakeup_channel_->EnableReading();
-    // struct epoll_event ev;
-    // ::memset(&ev, 0, sizeof(ev));
-    // ev.events = EPOLLIN | EPOLLET; // 可读事件和边缘触发
-    // ev.data.fd = wakeup_fd_;
-    // if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, wakeup_fd_, &ev) < 0) {
-    //     std::cerr << "EventLoop: epoll_ctl 绑定 wakeup_fd_ 失败, errno = " << errno << std::endl;
-    // }
 }
 
 EventLoop::~EventLoop() {
@@ -61,7 +54,7 @@ EventLoop::~EventLoop() {
 void EventLoop::Loop() {
     quit_ = false;
     LOG_INFO << "EventLoop 启动，正在等待内核事件...";
-    while (!quit_) {
+    while (!quit_.load(std::memory_order_acquire)) {
         // &*events_.begin(): 
         // events_.begin() 是迭代器，* 解引用得到元素对象，& 取地址得到连续物理内存的首地址。
         // 这行指针黑魔法可以完美欺骗 Linux 内核，将其作为普通的 C 风格数组传递。
@@ -100,7 +93,7 @@ void EventLoop::Loop() {
 
 void EventLoop::RunInLoop(Functor cb) {
     if (IsInLoopThread()) {
-        // 情况 A：发现就是本尊线程调用的，拒绝一切进队、排队、拿锁，直接“就地同步执行”！
+        // 情况 A：发现就是本线程调用的，拒绝一切进队、排队、拿锁，直接“就地同步执行”！
         // 性能开销为 0，极大提高了单线程内的执行速度
         cb();
     } else {
@@ -189,6 +182,21 @@ void EventLoop::Wakeup() {
     if (n != sizeof(one)) {
         LOG_ERROR << "EventLoop::Wakeup() 写入失败";
     }
+}
+
+void EventLoop::Quit() {
+    quit_.store(true, std::memory_order_release);
+    // 若不是在 loop 线程内调用，必须唤醒 epoll_wait，否则它会一直睡死
+    if (!IsInLoopThread()) {
+        Wakeup();
+    }
+}
+
+void EventLoop::QuitFromSignal() {
+    quit_.store(true, std::memory_order_release);
+    uint64_t one = 1;
+    auto n = ::write(wakeup_fd_, &one, sizeof(one)); // 裸 write，忽略返回值，不打日志
+    (void)n;
 }
 
 void EventLoop::HandleRead() {
