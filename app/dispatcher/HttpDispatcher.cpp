@@ -21,6 +21,7 @@
 #include "common/AppUtils.h"
 #include "daemons/SysMetricsDaemon.h"
 #include "repository/CommentRepository.h"
+#include "repository/BlacklistManager.h"
 
 namespace app {
 
@@ -120,6 +121,17 @@ static void HandlePostComment(RouteContext& ctx) {
                 else if (key == "content") text = decode_value;
             }
         }
+    }
+
+    // 在写入之前，判断是否在黑名单
+    if (BlacklistManager::IsBlackListed(nick)) {
+        ctx.status_line = "HTTP/1.1 403 Forbidden\r\n";
+        json err;
+        err["result"] = "ERROR";
+        err["msg"] = "[安全拦截]: 您的账号（" + nick + "）因违规已被限制留言。";
+        ctx.body = err.dump();
+        LOG_WARN << "🛡️ [黑名单拦截] 拒绝违规用户投递留言: " << nick;
+        return;
     }
 
     // 写入留言环形缓冲区
@@ -272,6 +284,29 @@ static void HandleStaticFile(RouteContext& ctx) {
     }
 }
 
+// 分支 H：管理员动态热加载黑名单
+static void HandleAdminReloadBlacklist(RouteContext& ctx) {
+    ctx.content_type = "Content-Type: " + GetMimeType(".json") + "\r\n";
+
+    // 要求 HTTP Header 中必须有 Authorization 字段，且内容匹配
+    auto it = ctx.req.headers.find("authorization");
+    if (it == ctx.req.headers.end() || it->second != "Bearer MY_SUPER_SECRET_TOKEN_2026") {
+        ctx.status_line = "HTTP/1.1 401 Unauthorized\r\n";
+        json err;
+        err["status"] = "ERROR";
+        err["msg"] = "抱歉，非管理用户无法修改黑名单! ";
+        ctx.body = err.dump();
+        LOG_WARN << "🚨 拦截到一次非法的热加载尝试，IP 已记录。";
+        return;
+    }
+
+    BlacklistManager::Reload();
+    json ok;
+    ok["status"] = "SUCCESS";
+    ok["msg"] = "黑名单规则已成功热加载至内存！";
+    ctx.body = ok.dump();
+}
+
 // ==========================================
 // 核心分发总线入口 (Dispatcher Router)
 // ==========================================
@@ -294,7 +329,8 @@ void HttpDispatcher::Dispatch(const std::shared_ptr<reactor::net::TcpConnection>
         {"GET:/api/comment", HandleGetComments},
         {"GET:/api/stress", HandleStress},
         {"GET:/api/agent/telemetry", HandleAgentTelemetry},
-        {"POST:/api/agent/control", HandleAgentControl}
+        {"POST:/api/agent/control", HandleAgentControl},
+        {"POST:/api/admin/reload_blacklist", HandleAdminReloadBlacklist}
     };
 
     std::string route_key = req.method + ":" + req.path;

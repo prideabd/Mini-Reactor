@@ -15,6 +15,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2 -pthread")
 # ============================================================================
 # 包含网络框架的头文件
 include_directories(${PROJECT_SOURCE_DIR}/include)
+# 包含第三方库
+include_directories(${PROJECT_SOURCE_DIR}/third_party)
 # 包含 app 目录本身
 include_directories(${PROJECT_SOURCE_DIR}/app)
 
@@ -40,6 +42,7 @@ set(APP_SOURCES
     ${PROJECT_SOURCE_DIR}/app/daemons/SysMetricsDaemon.cpp
     ${PROJECT_SOURCE_DIR}/app/repository/CommentRepository.cpp
     ${PROJECT_SOURCE_DIR}/app/common/AppUtils.cpp
+    ${PROJECT_SOURCE_DIR}/third_party/sqlite/sqlite3.c
 )
 
 # 定义你的最终交付应用目标（这里我们更名为更有应用标识度的 web_server）
@@ -49,7 +52,7 @@ add_executable(web_server ${APP_SOURCES})
 # 5. 依赖纽带链接
 # ============================================================================
 # 让业务程序 web_server 强力链接刚刚打好的框架库 reactor 以及操作系统的 pthread 库
-target_link_libraries(web_server PRIVATE reactor pthread)
+target_link_libraries(web_server PRIVATE reactor pthread dl)
 
 # ============================================================================
 # 6. 工程构建调试打印（方便盘查文件搜集是否发生物理错漏）
