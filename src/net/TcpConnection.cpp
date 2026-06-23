@@ -1,6 +1,8 @@
 #include <cerrno>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "reactor/net/Channel.h"
 #include "reactor/net/EventLoop.h"
@@ -55,6 +57,25 @@ void TcpConnection::Shutdown() {
             }
         });
     }
+}
+
+std::string TcpConnection::GetPeerIp() const {
+    sockaddr_storage ss{};
+    socklen_t len = sizeof(ss);
+    if (::getpeername(conn_fd_, reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
+        return "";
+    }
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (ss.ss_family == AF_INET) {
+        auto* s4 = reinterpret_cast<sockaddr_in*>(&ss);
+        ::inet_ntop(AF_INET, &s4->sin_addr, buf, sizeof(buf));
+    } else if (ss.ss_family == AF_INET6) {
+        auto* s6 = reinterpret_cast<sockaddr_in6*>(&ss);
+        ::inet_ntop(AF_INET6, &s6->sin6_addr, buf, sizeof(buf));
+    } else {
+        return "";
+    }
+    return std::string(buf);
 }
 
 // 📥 底层读驱动

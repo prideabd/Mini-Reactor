@@ -41,14 +41,17 @@ public:
     // 连接解体时的资源销毁
     void ConnectionDestroyed();
 
+    // 提供给上层协议网关主动关闭函数
+    void Shutdown();
+
+    // 提供给业务层的获取 IP 接口  
+    std::string GetPeerIp() const;
+
     // 开放上下文万能接口，允许上层应用协议(HTTP)挂载任何状态机
     void SetContext(const std::any& context) { context_ = context; }
     const std::any& GetContext() const { return context_; }
     std::any* GetMutableContext() { return &context_; }
     bool HasContext() const { return context_.has_value(); }
-
-    // 提供给上层协议网关主动关闭函数
-    void Shutdown();
 
     // 设置回调函数
     void SetMessageCallback(MessageCallback cb) { message_callback_ = std::move(cb); }
