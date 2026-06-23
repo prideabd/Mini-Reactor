@@ -3,11 +3,11 @@
 #include <thread>
 #include <vector>
 #include <string>
+#include <pthread.h>
 
 #include "reactor/net/EventLoop.h"
 #include "reactor/log/Logger.h"
 #include "reactor/log/AsyncLogging.h"
-
 #include "reactor/http/HttpServer.h"
 #include "reactor/http/HttpCodec.h"
 #include "dispatcher/HttpDispatcher.h"
@@ -38,6 +38,7 @@ void GracefulShutdownHandler(int signum) {
     }
 }
 
+// 对于信号的一些处理
 void RegisterSignals() {
     // 忽略 SIGPIPE（防止客户端断开导致服务端崩溃）
     struct sigaction sa_ign;
@@ -59,10 +60,35 @@ void RegisterSignals() {
     ::sigaction(SIGINT, &sa_shutdown, nullptr);
     ::sigaction(SIGTERM, &sa_shutdown, nullptr);
 
-    LOG_INFO << "🛡️ [系统防护]: 进程信号装甲已挂载（屏蔽SIGPIPE，捕获退出信号）。";
+    // 3. 阻塞 SIGHUP：不走异步 handler，改由专属线程 sigwait 同步处理（见 StartBlacklistReloadListener）。
+    //    必须在创建任何其他线程之前屏蔽，后续创建的所有线程都会继承此屏蔽，
+    //    从而保证 SIGHUP 只会被那个监听线程的 sigwait 捕获。
+    sigset_t hup_set;
+    ::sigemptyset(&hup_set);
+    ::sigaddset(&hup_set, SIGHUP);
+    ::pthread_sigmask(SIG_BLOCK, &hup_set, nullptr);
+
+    LOG_INFO << "🛡️ [系统防护]: 进程信号装甲已挂载（屏蔽SIGPIPE，捕获退出信号，阻塞SIGHUP交由热加载线程）。";
 
 }
 
+// SIGHUP 热加载监听线程：在普通线程上下文同步执行 Reload()，文件 I/O / 加锁均安全
+// （区别于异步信号 handler 的诸多限制）。前置条件：SIGHUP 已被屏蔽 + BlacklistManager 已初始化。
+void StartBlacklistReloadListener() {
+    std::thread reload_thread([]() {
+        sigset_t wait_set;
+        ::sigemptyset(&wait_set);
+        ::sigaddset(&wait_set, SIGHUP);
+        int sig = 0;
+        while (true) {
+            if (::sigwait(&wait_set, &sig) == 0 && sig == SIGHUP) {
+                LOG_INFO << "📡 [热加载]: 收到 SIGHUP 信号，开始动态重载黑名单...";
+                app::BlacklistManager::Reload();
+            }
+        }
+    });
+    reload_thread.detach(); // 监听线程随进程生命周期存在，进程退出时由内核回收
+}
 bool Init() {
     LOG_INFO << "🔄 [引导程序]: 正在加载业务子系统...";
 
@@ -116,6 +142,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    StartBlacklistReloadListener();
     {
         // --- 2. 服务器网络引擎初始化 ---
         // 实例化主反应堆（只负责管理 Acceptor 的连接接收事件）
