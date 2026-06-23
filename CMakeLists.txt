@@ -27,7 +27,8 @@ include_directories(${PROJECT_SOURCE_DIR}/app)
 file(GLOB_RECURSE FRAMEWORK_SOURCES "${PROJECT_SOURCE_DIR}/src/*.cpp")
 
 # 排除可能干扰构建的过时单线程测试入口
-list(REMOVE_ITEM FRAMEWORK_SOURCES "${PROJECT_SOURCE_DIR}/src/single_thread_main.cpp")
+# 目前路径不对，后续修改
+# list(REMOVE_ITEM FRAMEWORK_SOURCES "${PROJECT_SOURCE_DIR}/src/single_thread_main.cpp")
 
 # 将框架部分编译为一个独立的静态库（对 app 业务隐藏底层物理细节）
 add_library(reactor STATIC ${FRAMEWORK_SOURCES})
