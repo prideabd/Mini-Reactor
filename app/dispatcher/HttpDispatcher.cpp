@@ -39,6 +39,7 @@ struct RouteContext {
     std::string& status_line; // 回送报文的信息
     std::string& content_type;
     std::string& body;
+    const std::string& client_ip;
 };
 
 // 路由挂载函数签名
@@ -123,19 +124,49 @@ static void HandlePostComment(RouteContext& ctx) {
         }
     }
 
-    // 在写入之前，判断是否在黑名单
-    if (BlacklistManager::IsBlackListed(nick)) {
+    LOG_INFO << "📥 [留言投递] 来源 IP: " << (ctx.client_ip.empty() ? "unknown" : ctx.client_ip)
+         << " | 昵称: " << nick;
+
+    // 在写入之前，多维度黑名单校验（昵称 / IP / 关键词）
+    BlockResult verdict = BlacklistManager::CheckComment(nick, ctx.client_ip, text);
+    if (verdict.blocked()) {
         ctx.status_line = "HTTP/1.1 403 Forbidden\r\n";
+
+        std::string user_msg;
+        std::string log_dim;
+        switch (verdict.reason) {
+            case BlockReason::NICKNAME:
+                user_msg = "[安全拦截]: 您的账号（" + nick + "）因违规已被限制留言。";
+                log_dim = "昵称";
+                break;
+            case BlockReason::IP:
+                user_msg = "[安全拦截]: 您当前的网络环境因违规已被限制留言。";
+                log_dim = "IP";
+                break;
+            case BlockReason::KEYWORD:
+                user_msg = "[安全拦截]: 留言包含违禁内容，已被拦截，请修改后重试。";
+                log_dim = "关键词";
+                break;
+            default:
+                user_msg = "[安全拦截]: 留言因违规已被拦截。";
+                log_dim = "未知";
+                break;
+        }
+
         json err;
         err["result"] = "ERROR";
-        err["msg"] = "[安全拦截]: 您的账号（" + nick + "）因违规已被限制留言。";
+        err["msg"] = user_msg;
         ctx.body = err.dump();
-        LOG_WARN << "🛡️ [黑名单拦截] 拒绝违规用户投递留言: " << nick;
+
+        LOG_WARN << "🛡️ [黑名单拦截] 维度: " << log_dim
+             << " | 命中规则: " << verdict.detail
+             << " | 昵称: " << nick
+             << " | 来源 IP: " << (ctx.client_ip.empty() ? "unknown" : ctx.client_ip);
         return;
     }
 
     // 写入留言环形缓冲区
-    CommentRepository::PushComment(nick, text);
+    CommentRepository::PushComment(nick, text, ctx.client_ip);
     json ok; 
     ok["result"] = "SUCCESS"; 
     ok["msg"] = "写入成功";
@@ -187,6 +218,7 @@ static void HandleAgentTelemetry(RouteContext& ctx) {
         item["seq"] = c.sequence;
         item["nick"] = c.nickname;
         item["text"] = c.content;
+        item["ip"] = c.ip;
         comments_arr.push_back(item);
     }
     root["comments"] = comments_arr;
@@ -224,12 +256,24 @@ static void HandleAgentControl(RouteContext& ctx) {
 
             if (!target_sequences.empty()) {
                 int success_count = 0;
+                std::vector<std::string> banned_nicks;
+                std::vector<std::string> banned_ips;
                 for (uint64_t seq : target_sequences) {
-                    if (CommentRepository::EraseComment(seq)) {
+                    std::string banned_nick, banned_ip;
+                    if (CommentRepository::EraseComment(seq, banned_nick, banned_ip)) {
                         success_count++;
+                        // 根据昵称 + IP 拉黑
+                        if (!banned_nick.empty() && banned_nick != "匿名极客") {
+                             banned_nicks.push_back(banned_nick);
+                        }
+                        if (!banned_ip.empty()) {
+                            banned_ips.push_back(banned_ip);
+                        }
                         LOG_WARN << "🛡️ [AI Agent]: 成功对 seq:" << seq << " 执行原子擦除。";
                     }
                 }
+                 // 整批擦除完成后，一次性写锁 + 一次性回写黑名单文件
+                BlacklistManager::AddBatch(banned_nicks, banned_ips);
                 action_taken = "BATCH_ERASED_" + std::to_string(success_count);
             } else {
                 action_taken = "NO_VALID_TARGETS";
@@ -241,7 +285,15 @@ static void HandleAgentControl(RouteContext& ctx) {
         if (cmd.rfind("block_seq:", 0) == 0 || cmd.rfind("block_seq=", 0) == 0) {
             try {
                 uint64_t seq = std::stoull(cmd.substr(10));
-                if (CommentRepository::EraseComment(seq)) action_taken = "LEGACY_COMMENT_ERASED";
+                std::string banned_nick, banned_ip;
+                if (CommentRepository::EraseComment(seq, banned_nick, banned_ip)) {
+                    // 单条擦除同样走批量接口，保证「一次写锁 + 一次回写」的统一语义
+                    std::vector<std::string> nk, ip_vec;
+                    if (!banned_nick.empty() && banned_nick != "匿名极客") nk.push_back(banned_nick);
+                    if (!banned_ip.empty()) ip_vec.push_back(banned_ip);
+                    BlacklistManager::AddBatch(nk, ip_vec);
+                    action_taken = "LEGACY_COMMENT_ERASED";
+                }
                 else action_taken = "COMMENT_VERSION_MISMATCH";
             } catch (...) { action_taken = "PARSE_ERROR"; }
         } else {
@@ -320,7 +372,8 @@ void HttpDispatcher::Dispatch(const std::shared_ptr<reactor::net::TcpConnection>
     std::string status_line = "HTTP/1.1 200 OK\r\n";
     std::string content_type = "Content-Type: text/html; charset=utf-8\r\n";
     std::string body;
-    RouteContext ctx{req, status_line, content_type, body};
+    std::string client_ip = conn->GetPeerIp();
+    RouteContext ctx{req, status_line, content_type, body, client_ip};
 
     // O(1) 静态路由挂载表
     static const std::unordered_map<std::string, RouteHandler> router = {
