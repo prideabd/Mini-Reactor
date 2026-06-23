@@ -20,6 +20,7 @@ struct CommentSnapshot {
     uint64_t sequence;
     std::string nickname;
     std::string content;
+    std::string ip;
 };
 
 /**
@@ -35,7 +36,7 @@ public:
     static void Shutdown();
 
     // 写入 昵称-评论
-    static void PushComment(const std::string& nickname, const std::string& content);
+    static void PushComment(const std::string& nickname, const std::string& content, const std::string& ip);
 
     // 前端网页：安全获取最新的留言
     static std::vector<std::pair<std::string, std::string>> GetLatestComments();
@@ -44,7 +45,7 @@ public:
     static void GetTelemetrySnapshot(uint64_t& out_current_seq, std::vector<CommentSnapshot>& out_comments);
 
     // Agent: 控制干预，删除指定 seq 的恶意留言
-    static bool EraseComment(uint64_t seq);
+    static bool EraseComment(uint64_t seq, std::string& out_nick, std::string& out_ip);
 
 private:
     // ==========================================
@@ -56,6 +57,7 @@ private:
         uint64_t sequence;
         std::string nickname;
         std::string content;
+        std::string ip;
     };
 
     // 投递任务到后台队列
@@ -64,7 +66,7 @@ private:
     static void DBWorkerLoop();
     // SQLite 内部操作封装
     static bool InitSqlite(const std::string& db_path);
-    static void ExecuteTaskToSqlite(const DBTask& task);
+    static bool ExecuteTaskToSqlite(const DBTask& task);
 
     // ==========================================
     // 异步控制成员变量
