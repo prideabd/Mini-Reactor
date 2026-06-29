@@ -1,9 +1,11 @@
 #include <sys/eventfd.h>
+#include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
 #include <cstdlib>
 #include <cerrno>
+
 #include "reactor/net/EventLoop.h"
 #include "reactor/net/Channel.h"
 #include "reactor/log/Logger.h"
@@ -15,6 +17,7 @@ static constexpr int kInitEventListSize = 16;
 EventLoop::EventLoop()
     : epoll_fd_(-1),
       wakeup_fd_(-1),
+      timer_fd_(-1),
       quit_(false),
       events_(kInitEventListSize),
       thread_id_(std::this_thread::get_id())
@@ -38,6 +41,15 @@ EventLoop::EventLoop()
     wakeup_channel_ = std::make_unique<Channel>(this, wakeup_fd_);
     wakeup_channel_->SetReadCallback(std::bind(&EventLoop::HandleRead, this));
     wakeup_channel_->EnableReading();
+    
+    // 4. 创建 timer_fd_
+    timer_fd_ = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (timer_fd_ < 0) {
+        LOG_FATAL << "EventLoop: timerfd_create 失败, errno = " << errno;
+    }
+    timer_channel_ = std::make_unique<Channel>(this, timer_fd_);
+    timer_channel_->SetReadCallback(std::bind(&EventLoop::HandleTimerfd, this));
+    timer_channel_->EnableReading();
 }
 
 EventLoop::~EventLoop() {
@@ -47,6 +59,9 @@ EventLoop::~EventLoop() {
     }
     if (epoll_fd_ >= 0) {
         ::close(epoll_fd_);
+    }
+    if (timer_fd_ >= 0) {
+        ::close(timer_fd_);
     }
     pthread_mutex_destroy(&mutex_); // 销毁互斥锁
 }
@@ -214,5 +229,126 @@ void EventLoop::HandleRead() {
     // ====================================================
     LOG_DEBUG << "Loop 成功被跨线程【唤醒】，正在处理队列任务...";
 }
+
+// ============ 定时器对外接口：先原子生成 id 再投递回 loop 线程 ============
+EventLoop::TimerId EventLoop::RunAfter(double delay_sec, TimerCallback cb) {
+    // 定时器 Id
+    TimerId id = next_timer_id_.fetch_add(1, std::memory_order_relaxed);
+    // 计算到期时间
+    TimePoint when = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(delay_sec));
+    RunInLoop([this, id, when, cb = std::move(cb)] () mutable {
+        AddTimerInLoop(id, when, 0.0, std::move(cb));
+    });
+    return id;
+}
+
+EventLoop::TimerId EventLoop::RunEvery(double interval_sec, TimerCallback cb) {
+    TimerId id = next_timer_id_.fetch_add(1, std::memory_order_relaxed);
+    TimePoint when = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(interval_sec));
+    RunInLoop([this, id, when, interval_sec, cb = std::move(cb)] () mutable {
+        AddTimerInLoop(id, when, interval_sec, std::move(cb));
+    });
+    return id;
+}
+
+void EventLoop::CancelTimer(TimerId timer_id) {
+    RunInLoop([this, timer_id] () {
+        CancelTimerInLoop(timer_id);
+    });
+}
+
+// ============ 以下均只在 loop 线程内执行，访问 timers_ 无需加锁 ============
+void EventLoop::AddTimerInLoop(TimerId id, TimePoint when, double interval_sec, TimerCallback cb) {
+    // 判断是否改变了最先到期时间
+    // 如果当前定时器队列是空的(timers_.empty())，或者新加的这个定时器到期时间(when)比目前队列里最先到期的那个还要早(< timers_.begin()->first)
+    // 说明整个底层内核定时器(timerfd)的闹钟时间需要重新调整了。
+    bool earliest_changed = timers_.empty() || when < timers_.begin()->first;
+    timers_.emplace(when, Timer{id, std::move(cb), interval_sec});
+    active_[id] = when;
+    if (earliest_changed) {
+        ResetTimerfd(timers_.begin()->first);
+    }
+}
+
+void EventLoop::CancelTimerInLoop(TimerId id) {
+    auto it = active_.find(id);
+    if (it != active_.end()) {
+        // 还在表里:同一时间键可能挂多个定时器,按 id 精确匹配后删除
+        TimePoint when = it->second; // 记下到期时间
+        auto range = timers_.equal_range(it->second);
+        for (auto i = range.first; i != range.second; ++i) {
+            if (i->second.id == id) {
+                timers_.erase(i);
+                break;
+            }
+        }
+        active_.erase(it);
+        // 若取消的是（并列）最早到期者，重新校准内核闹钟，省掉一次空唤醒
+        if (!timers_.empty() && when <= timers_.begin()->first) {
+            ResetTimerfd(timers_.begin()->first);
+        }
+    } else if (calling_expired_timers_) {
+        // 正在本轮被触发(已移入快照,active_ 里已无):登记一下,阻止稍后续期
+        canceling_timers_.insert(id);
+    }
+    // else:早已消亡的定时器 —— active_ 找不到,直接忽略,不留任何垃圾
+}
+
+void EventLoop::HandleTimerfd() {
+    // ET 模式： 必须 read 把到期计数全部读走，否则不再触发
+    uint64_t expirations = 0;
+    ssize_t n = ::read(timer_fd_, &expirations, sizeof(expirations));
+    if (n != sizeof(expirations)) {
+        LOG_ERROR << "EventLoop::HandleTimerfd() 读取失败";
+    }
+
+    TimePoint now = Clock::now();
+    // 1. 先把所有到期的定时器从有序表里摘出来（快照），再统一执行
+    //    回调内部可能继续 Add/Cancel 定时器，先摘出来可避免迭代器失效
+    std::vector<Timer> expired;
+    auto it = timers_.begin();
+    while (it != timers_.end() && it->first <= now) {
+        active_.erase(it->second.id);
+        expired.push_back(std::move(it->second));
+        it = timers_.erase(it);
+    }
+    // 2. 逐个执行；跳过已取消的；周期定时器若未取消则续期
+    calling_expired_timers_ = true;
+    canceling_timers_.clear();
+    for (auto& t : expired) {
+        if (t.cb) t.cb();
+        // 未在本轮被取消的周期定时器才续期
+        if (t.interval_sec > 0.0 && canceling_timers_.count(t.id) == 0) {
+            TimePoint next = now +
+                std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<double>(t.interval_sec));
+            timers_.emplace(next, Timer{t.id, std::move(t.cb), t.interval_sec});
+            active_[t.id] = next;
+        }
+    }
+    calling_expired_timers_ = false;
+
+    // 3. 还有剩余定时器则武装到下一个最近到期点
+    if (!timers_.empty()) {
+        ResetTimerfd(timers_.begin()->first);
+    }
+}
+
+void EventLoop::ResetTimerfd(TimePoint earliest) {
+    struct itimerspec new_value;
+    ::memset(&new_value, 0, sizeof(new_value));
+
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  earliest - Clock::now()).count();
+    if (ns < 1000) ns = 1000; // 至少 1us：it_value 全 0 会「停掉」timerfd，必须避免
+    
+    new_value.it_value.tv_sec  = ns / 1'000'000'000;
+    new_value.it_value.tv_nsec = ns % 1'000'000'000;
+    // it_interval 保持 0：我们每次手动按 timers_.begin() 重新武装，不靠内核周期触发
+    if (::timerfd_settime(timer_fd_, 0, &new_value, nullptr) < 0) {
+        LOG_ERROR << "EventLoop: timerfd_settime 失败, errno = " << errno;
+    }
+}
+
 
 } // namespace reactor::net
