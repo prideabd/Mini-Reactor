@@ -73,7 +73,7 @@ void Connector::Connect() {
 
     struct sockaddr_in addr;
     ::memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET:
+    addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<uint16_t>(port_));
     if (::inet_pton(AF_INET, ip_.c_str(), &addr.sin_addr) <= 0) {
         LOG_ERROR << "❌ [Connector] 非法的上游 IP: " << ip_;
@@ -132,12 +132,12 @@ void Connector::HandleWrite() {
     }
     if (err != 0) {
         LOG_ERROR << "❌ [Connector] 连接失败, SO_ERROR = " << err;
-        Retry(sockfd);
+        Retry(sock_fd);
         return;
     }
     if (IsSelfConnect(sock_fd)) {
         LOG_ERROR << "♻️ [Connector] 检测到自连接，丢弃并重试";
-        Retry(sockfd);
+        Retry(sock_fd);
         return;
     }
 
@@ -146,7 +146,7 @@ void Connector::HandleWrite() {
     retry_delay_sec_ = kInitRetryDelaySec; // 成功连接后复位退避
     if (connect_.load()) {
         LOG_INFO << "🔗 [Connector] 已连上 上层 C++ 后端 " << ip_ << ":" << port_
-                 << " FD [" << sockfd << "]";
+                 << " FD [" << sock_fd << "]";
         if (new_connection_callback_) {
             new_connection_callback_(sock_fd); // 移交 fd
         } else {
@@ -202,7 +202,7 @@ int Connector::RemoveAndResetChannel() {
     int sock_fd = channel_->GetFd();
     // 不能在 Channel 自己的回调里销毁它，延后到本轮事件处理结束后
     loop_->QueueInLoop([this]() { ResetChannel(); });
-    return sockfd;
+    return sock_fd;
 }
 
 void Connector::ResetChannel() {

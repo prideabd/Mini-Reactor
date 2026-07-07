@@ -16,7 +16,7 @@ namespace reactor::http {
 HttpServer::HttpServer(reactor::net::EventLoop* loop, int port, size_t thread_count)
     : tcp_server_(loop, port, thread_count)
 {
-    tcp_server_.setMessageCallback(
+    tcp_server_.SetMessageCallback(
         std::bind(&HttpServer::OnConnectionMessage, this, std::placeholders::_1, std::placeholders::_2)
     );
 }
