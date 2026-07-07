@@ -4,9 +4,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include "reactor/net/TcpConnection.h"
 #include "reactor/net/Channel.h"
 #include "reactor/net/EventLoop.h"
-#include "reactor/net/TcpConnection.h"
 #include "reactor/log/Logger.h"
 
 namespace reactor::net {
@@ -33,6 +33,9 @@ TcpConnection::~TcpConnection() {
 void TcpConnection::ConnectionEstablished() {
     state_ = kConnected;
     channel_->EnableReading(); // 挂载红黑树，启动可读监听
+    if (connection_callback_) {
+        connection_callback_(shared_from_this());
+    }
 }
 
 void TcpConnection::ConnectionDestroyed() {
@@ -148,6 +151,9 @@ void TcpConnection::HandleClose() {
 
     // 让当前 Channel 注销红黑树上的所有事件监听，让 Epoll 树对该 FD 彻底保持沉默
     channel_->DisableAll();
+    if (connection_callback_) {
+        connection_callback_(shared_from_this());
+    }
     if (close_callback_) {
         close_callback_(shared_from_this());
     }

@@ -21,6 +21,7 @@ public:
     // 注入 TcpServer 上层回调
     using MessageCallback = std::function<void(const std::shared_ptr<TcpConnection>&, Buffer*)>;
     using CloseCallback = std::function<void(const std::shared_ptr<TcpConnection>&)>;
+    using ConnectionCallback = std::function<void(const std::shared_ptr<TcpConnection>&)>;
 
     TcpConnection(EventLoop* loop, int conn_fd);
     ~TcpConnection();
@@ -56,6 +57,7 @@ public:
     // 设置回调函数
     void SetMessageCallback(MessageCallback cb) { message_callback_ = std::move(cb); }
     void SetCloseCallback(CloseCallback cb) { close_callback_ = std::move(cb); }
+    void SetConnectionCallback(ConnectionCallback cb) { connection_callback_ = std::move(cb); }
 
 private:
     // 提供给内核底层
@@ -75,6 +77,7 @@ private:
 
     MessageCallback message_callback_;
     CloseCallback close_callback_;
+    ConnectionCallback connection_callback_;
 };
 
 } // namespace reactor::net

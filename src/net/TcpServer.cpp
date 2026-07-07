@@ -48,6 +48,7 @@ void TcpServer::NewConnection(int conn_fd) {
     // 挂载关联回调
     conn->SetMessageCallback(std::bind(&TcpServer::OnMessage, this, std::placeholders::_1,std::placeholders::_2));
     conn->SetCloseCallback(std::bind(&TcpServer::RemoveConnection, this, std::placeholders::_1));
+    conn->SetConnectionCallback(connection_callback_);
 
     connections_[conn_fd] = conn;
 

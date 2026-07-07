@@ -22,6 +22,7 @@ class TcpConnection;
 class TcpServer {
 public:
     using MessageCallback = std::function<void(const std::shared_ptr<TcpConnection>&, Buffer*)>;
+    using ConnectionCallback = std::function<void(const std::shared_ptr<TcpConnection>&)>;
 
     TcpServer(EventLoop* main_loop, int port, size_t thread_count);
     ~TcpServer();
@@ -29,7 +30,8 @@ public:
     void Start();
 
     // 提供给外部（如 HTTP 模块）注入协议解析器的接口
-    void setMessageCallback(const MessageCallback& cb) { message_callback_ = cb; }
+    void SetMessageCallback(const MessageCallback& cb) { message_callback_ = cb; }
+    void SetConnectionCallback(const ConnectionCallback& cb) { connection_callback_ = cb; }
 
 private:
     void NewConnection(int conn_fd);    // 接管 Acceptor 传上来的新连接描述符
@@ -47,6 +49,7 @@ private:
     std::unordered_map<int, std::shared_ptr<TcpConnection>> connections_;
 
     MessageCallback message_callback_; // 回调函数
+    ConnectionCallback connection_callback_;
 };
 
 } // namespace reactor::net
