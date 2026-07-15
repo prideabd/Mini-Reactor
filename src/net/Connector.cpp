@@ -13,19 +13,27 @@
 
 namespace reactor::net {
 
+namespace {
 constexpr double kInitRetryDelaySec = 0.5; // 初始退避 0.5s
 constexpr double kMaxRetryDelaySec = 30.0; // 最大退避 30s
 
-namespace {
 // 自连接检测：非阻塞 connect 偶发的「本地端口恰好等于目标端口」自环，需丢弃重连
 bool IsSelfConnect(int sock_fd) {
     struct sockaddr_in local;
     struct sockaddr_in peer;
     socklen_t llen = sizeof(local);
     socklen_t plen = sizeof(peer);
-    if (::getsockname(sock_fd, (struct sockaddr*)&local, &llen) < 0) return false;
-    if (::getpeername(sock_fd, (struct sockaddr*)&peer, &plen) < 0) return false;
-    return local.sin_port == peer.sin_port && local.sin_addr.s_addr == peer.sin_addr.s_addr;
+    if (::getsockname(sock_fd, (struct sockaddr*)&local, &llen) < 0) {
+        return false;
+    }
+    if (::getpeername(sock_fd, (struct sockaddr*)&peer, &plen) < 0) {
+        return false;
+    }
+
+    return local.sin_family == AF_INET &&
+           peer.sin_family == AF_INET &&
+           local.sin_port == peer.sin_port &&
+           local.sin_addr.s_addr == peer.sin_addr.s_addr;
 }
 } // namespace
 
@@ -38,11 +46,11 @@ Connector::Connector(EventLoop* loop, const std::string& ip, int port)
       retry_delay_sec_(kInitRetryDelaySec),
       retry_timer_(0)
 {
-
 }
 
 Connector::~Connector() {
-    // 正常应先 Stop() 再析构；这里兜底提示，避免连接中途析构导致 fd 泄漏
+    // 正常情况下，StopInLoop() / RemoveAndResetChannel() 会提前清掉 channel_。
+    // 若这里仍有 channel_，说明 owner 没有正确 Stop，或者还有异常路径未收敛。
     if (channel_) {
         LOG_ERROR << "⚠️ [Connector] 析构时仍在连接中，请确保先调用 Stop()";
     }
@@ -50,16 +58,41 @@ Connector::~Connector() {
 
 void Connector::Start() {
     connect_.store(true);
-    loop_->RunInLoop([this]() {
-        StartInLoop();
+
+    auto self = shared_from_this();
+    loop_->RunInLoop([self]() {
+        self->StartInLoop();
     });
 }
 
 void Connector::StartInLoop() {
-    if (connect_.load()) {
-        Connect();
-    } else {
+    if (!connect_.load()) {
         LOG_DEBUG << "🛑 [Connector] 已取消，不再发起连接";
+        return;
+    }
+    if (state_.load() == kDisconnected) {
+        Connect();
+    }
+}
+
+void Connector::Stop() {
+    connect_.store(false);
+
+    auto self = shared_from_this();
+    loop_->RunInLoop([self]() {
+        self->StopInLoop();
+    });
+}
+
+void Connector::StopInLoop() {
+    if (retry_timer_ != 0) {
+        loop_->CancelTimer(retry_timer_);
+        retry_timer_ = 0;
+    }
+    if (state_.load() == kConnecting && channel_) {
+        state_.store(kDisconnected);
+        int sock_fd = RemoveAndResetChannel();
+        ::close(sock_fd);
     }
 }
 
@@ -68,6 +101,7 @@ void Connector::Connect() {
     int sock_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (sock_fd < 0) {
         LOG_ERROR << "❌ [Connector] 创建 socket 失败, errno = " << errno;
+        if (error_callback_) error_callback_();
         return;
     }
 
@@ -78,6 +112,7 @@ void Connector::Connect() {
     if (::inet_pton(AF_INET, ip_.c_str(), &addr.sin_addr) <= 0) {
         LOG_ERROR << "❌ [Connector] 非法的上游 IP: " << ip_;
         ::close(sock_fd);
+        if (error_callback_) error_callback_();
         return;
     }
 
@@ -113,8 +148,22 @@ void Connector::Connect() {
 void Connector::Connecting(int sock_fd) {
     state_.store(kConnecting);
     channel_ = std::make_unique<Channel>(loop_, sock_fd);
-    // 只关注可写：非阻塞 connect 完成（无论成败）时，内核都会报告该 fd 可写
-    channel_->SetWriteCallback(std::bind(&Connector::HandleWrite, this));
+
+    // 这里捕获 shared_ptr，是为了保证：只要 Channel 还挂在 epoll 上，Connector 就不会提前析构。
+    // 该引用环会在 RemoveAndResetChannel() -> ResetChannel() 时被打破。
+    auto self = shared_from_this();
+    channel_->SetWriteCallback([self]() {
+        self->HandleWrite();
+    });
+    // 非阻塞 connect 的完成/失败都会通过 epoll 事件通知：
+    //   - EPOLLOUT：连接有结果，可能成功也可能失败；
+    //   - EPOLLERR：socket 出现异步错误。
+    // 两种情况都必须用 getsockopt(SO_ERROR) 获取最终 connect 结果，
+    // 因此统一收敛到 HandleWrite()。
+    channel_->SetErrorCallback([self]() {
+        self->HandleWrite();
+    });
+
     channel_->EnableWriting();
 }
 
@@ -160,52 +209,42 @@ void Connector::HandleWrite() {
 void Connector::Retry(int sock_fd) {
     ::close(sock_fd);
     state_.store(kDisconnected);
-    
-    // 每次失败都通知上层（上层可在回调里调用 Stop() 主动放弃）
-    if (error_callback_) error_callback_();
 
     if (!connect_.load()) {
         LOG_DEBUG << "🛑 [Connector] 已被取消，停止重试";
         return;
     }
 
+    // 每次失败都通知上层（上层可在回调里调用 Stop() 主动放弃）
+    if (error_callback_) error_callback_();
+
     LOG_INFO << "🔄 [Connector] " << retry_delay_sec_ << "s 后重连 "
              << ip_ << ":" << port_;
     
-    retry_timer_ = loop_->RunAfter(retry_delay_sec_, [this]() { StartInLoop(); });
-    retry_delay_sec_ = std::min(retry_delay_sec_ * 2, kMaxRetryDelaySec);
-}
-
-
-void Connector::Stop() {
-    connect_.store(false);
-    loop_->RunInLoop([this]() {
-        StopInLoop();
+    auto self = shared_from_this();
+    retry_timer_ = loop_->RunAfter(retry_delay_sec_, [self]() {
+        self->retry_timer_ = 0;
+        self->StartInLoop();
     });
-}
-
-void Connector::StopInLoop() {
-    if (state_.load() == kConnecting) {
-        state_.store(kDisconnected);
-        int sock_fd = RemoveAndResetChannel();
-        ::close(sock_fd);
-    }
-    if (retry_timer_ != 0) {
-        loop_->CancelTimer(retry_timer_);
-        retry_timer_ = 0;
-    }
+    retry_delay_sec_ = std::min(retry_delay_sec_ * 2, kMaxRetryDelaySec);
 }
 
 int Connector::RemoveAndResetChannel() {
     channel_->DisableAll();
     channel_->Remove();
     int sock_fd = channel_->GetFd();
-    // 不能在 Channel 自己的回调里销毁它，延后到本轮事件处理结束后
-    loop_->QueueInLoop([this]() { ResetChannel(); });
+
+    // 不能在 Channel 自己的回调栈内直接销毁 Channel。
+    // 用 self 延长 Connector 生命周期，直到 ResetChannel() 执行完毕。
+    auto self = shared_from_this();
+    loop_->QueueInLoop([self]() {
+        self->ResetChannel();
+    });
     return sock_fd;
 }
 
 void Connector::ResetChannel() {
-    channel_.reset();
+    channel_.reset(); // 打破 channel_ -> callback -> shared_ptr<Connector> 的引用环
 }
-}
+
+} // namespace reactor::net

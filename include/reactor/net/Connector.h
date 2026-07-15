@@ -4,30 +4,41 @@
 /**
  * @file Connector.h
  * @brief Connector 类，主动发起 TCP 连接（Acceptor 的对偶）。
- *        非阻塞 connect + 指数退避「有界」重试；连接成功后把裸 sockfd 交给上层，
- *        由上层（TcpClient）包成 TcpConnection。重试预算（次数/时限）耗尽后，
- *        触发一次 ErrorCallback 告知调用方彻底放弃（反代据此回 502）。
+ *
+ * 生命周期模型：
+ *   - Connector 必须由 std::shared_ptr 管理，通过 Connector::Create() 创建。
+ *   - 所有跨线程 / 延迟 / Channel 回调都使用 shared_from_this() 延长 Connector 生命周期，
+ *     避免异步任务捕获裸 this 后对象提前析构导致悬空指针。
+ *   - TcpClient 持有 std::shared_ptr<Connector>。
  */
 
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
-#include <atomic>
-#include <cstdint>
-#include <chrono>
 
 namespace reactor::net {
     
 class EventLoop;
 class Channel;
 
-class Connector {
+class Connector : public std::enable_shared_from_this<Connector> {
 public:
+    using Ptr = std::shared_ptr<Connector>;
     using NewConnectionCallback = std::function<void(int sock_fd)>;
     using ErrorCallback = std::function<void()>;
 
-    Connector(EventLoop* loop, const std::string& ip, int port);
+    // 静态工厂
+    static Ptr Create(EventLoop* loop, const std::string& ip, int port) {
+        return Ptr(new Connector(loop, ip, port));
+    }
+
     ~Connector();
+
+    // 禁用赋值和拷贝
+    Connector(const Connector&) = delete;
+    Connector& operator=(const Connector&) = delete;
 
     void SetNewConnectionCallback(NewConnectionCallback cb) {
         new_connection_callback_ = std::move(cb);
@@ -36,8 +47,8 @@ public:
         error_callback_ = std::move(cb);
     }
 
-    void Start(); // 发起连接，内部RunInLoop
-    void Stop();  // 停止并取消未决的重试定时器
+    void Start(); // 发起连接，内部 RunInLoop，并用 shared_ptr 自保
+    void Stop();  // 停止连接 / 重试，内部 RunInLoop，并用 shared_ptr 自保
 
 private:
     enum State {
@@ -45,6 +56,8 @@ private:
         kConnecting,
         kConnected
     };
+
+    Connector(EventLoop* loop, const std::string& ip, int port);
 
     void StartInLoop();
     void StopInLoop();
