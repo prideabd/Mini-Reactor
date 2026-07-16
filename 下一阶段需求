@@ -1,127 +1,191 @@
+<aside>
+🎯
 
----
-# 阶段9:
----
-**留言系统升级需求文档**：
+**一句话目标**:在现有 `reactor::net` 主从 Reactor 底座之上,增加「反向代理」能力——让服务器不仅能自己应答,还能把下游(公网客户端)的流量转发给上游(后端服务器),并把响应回传。
 
----
+**核心设计原则**:**最大化复用**现有 `EventLoop / Channel / TcpConnection / Buffer / 线程池`,只在缺口处新增组件,绝不另起炉灶。
 
-# 📝 留言系统升级需求文档 (PRD)
+</aside>
 
-**版本:** v1.0
+## 0. 复用判断:哪些直接用,哪些要新增
 
-**主要模块:** 本地持久化、分布式黑名单、动态热加载
+详细组件职责见 Reactor 网络库组件职责说明。
 
----
+| 能力 | 现状 | 结论 |
+| --- | --- | --- |
+| 事件循环 / epoll 引擎 | `EventLoop` 已完善 | ✅ 直接复用 |
+| 接收下游连接 | `Acceptor`  • `TcpServer` 已完善 | ✅ 直接复用(下游入口) |
+| 连接读写 / 状态机 / 半关闭 | `TcpConnection` 已完善 | ✅ 直接复用(上下游连接都用它) |
+| 挂载会话状态 | `TcpConnection::context_`(`std::any`) | ✅ 直接复用,用来挂 ProxySession |
+| HTTP 按行解析 | `Buffer` 已有 `FindCRLF`/`RetrieveUntil` | ✅ 复用,L7 阶段再用 |
+| **主动发起上游连接** | **缺**(只有被动 accept) | 🆕 新增 `Connector`  • `TcpClient` |
+| **桥接上下游** | **缺** | 🆕 新增 `ProxySession` |
+| **背压 / 流控** | **缺** `WriteCompleteCallback`/`HighWaterMarkCallback` | 🆕 给 `TcpConnection` 补回调 |
 
-## 1. 背景与目标
+## 1. 范围与非目标
 
-### 1.1 背景
+- **范围(本期要做)**:TCP 层透明转发 → 背压 → HTTP L7 解析与路由 → 上游池与负载均衡 → 配置化 → 基础可靠性。
+- **非目标(本期不做)**:HTTPS/TLS 终止、HTTP/2 与 gRPC、缓存(cache)、动态配置热加载、限流/WAF、URL 重写规则引擎。先留接口,后续迭代。
 
-当前 `CommentRepository` 采用纯内存环形缓冲区（`MAX_MEM_COMMENTS = 50`）存储最新留言，具备极高的读写性能。然而，由于缺乏持久化机制，服务器重启会导致所有历史留言丢失。此外，随着业务发展，系统亟需对接分布式黑名单以拦截违规内容，并支持在不重启服务的情况下动态更新配置。
+## 2. 分阶段需求
 
-### 1.2 目标
+<aside>
+🧭
 
-* **零数据丢失（持久化）:** 保证内存中的环形缓冲区数据能够持久化到本地，并在服务器重启时完整恢复。
-* **安全合规（分布式黑名单）:** 引入分布式黑名单机制，实时拦截/抹除违规用户的留言。
-* **不停机维护（动态热加载）:** 支持黑名单规则或系统配置的动态热加载，确保高可用性。
-* **性能守恒:** 升级后的系统不应显著降低原有的内存读写性能。
+建议**严格按阶段推进**:每个阶段都能独立跑通、独立验收,后一阶段依赖前一阶段的产物。先 L4 跑通链路,再补健壮性,最后才上 L7 智能。
 
----
+</aside>
 
-## 2. 核心功能需求
+### 阶段一:TCP 层透明转发(L4 / MVP)
 
-### 2.1 需求一：本地数据持久化 (Local Persistence)
+**目标**:把一条下游连接的字节流原样转发到一个**写死的**上游地址,并把上游响应原样回传。先不理解 HTTP。
 
-* **功能描述:** 内存环形缓冲区的数据需要同步写入本地存储（如 SQLite、LevelDB 或轻量级 Append-Only Log 文件）。
-* **业务规则:**
-* **启动恢复:** 仓储层初始化时，应自动读取本地持久化文件，将最后 `MAX_MEM_COMMENTS` 条留言加载回内存环形缓冲区，并正确恢复 `g_comment_sequence` 的计数。
-* **异步写入:** 为了不阻塞 `PushComment` 的主业务流程，数据的持久化操作应采用**异步线程**或定时批处理（Flush）机制。
-* **擦除同步:** 当调用 `EraseComment` 抹除某条留言时，本地存储中的对应数据也必须同步更新或标记删除。
+- [ ]  新增 `Connector`:对指定 `ip:port` 发起**非阻塞** `connect`,处理 `EINPROGRESS`,connect 成功/失败回调。
+- [ ]  新增 `TcpClient`:封装 `Connector`,连接成功后在**同一个 sub_loop** 上生成一条上游 `TcpConnection`。
+- [ ]  新增 `ProxySession`:持有「下游 conn + 上游 conn」一对,实现双向数据泵(down→up、up→down)。
+- [ ]  用 `TcpConnection::SetContext` 把 `ProxySession` 挂到连接上,管理其生命周期。
+- [ ]  上游与下游连接**必须落在同一个 sub_loop**(单线程无锁约束)。
+- [ ]  任意一端关闭时,优雅关闭另一端(转发完缓冲再 `Shutdown`)。
+- **验收**:`curl` 经代理访问后端,响应字节与直连完全一致;并发多连接互不串数据。
 
+### 阶段二:背压与流控(健壮性基础设施)
 
+**目标**:补齐做代理必需的流控能力,防止上下游速度不匹配导致 `output_buffer_` 无限膨胀 OOM。
 
-### 2.2 需求二：分布式黑名单 (Distributed Blacklist)
+- [ ]  给 `TcpConnection` 增加 `WriteCompleteCallback`(发送缓冲清空时触发)。
+- [ ]  给 `TcpConnection` 增加 `HighWaterMarkCallback` + 高水位阈值(积压超阈值时触发)。
+- [ ]  `Send` 增加 `(const void*, size_t)` 与 `Buffer*` 重载,减少拷贝。
+- [ ]  `ProxySession` 接入流控:某端积压过高时,**暂停读另一端**(`DisableReading`),待 `WriteCompleteCallback` 再 `EnableReading` 恢复。
+- **验收**:用慢速客户端 + 快速后端(或反之)压测,代理内存稳定、不爆缓冲。
 
-* **功能描述:** 在留言入库前或展示时，校验用户是否处于分布式黑名单中。
-* **业务规则:**
-* **多维度拦截:** 支持按 `nickname`（昵称）、`IP`（需扩展接口）或特定关键词进行拦截。
-* **分布式同步:** 黑名单数据存储在分布式缓存（如 Redis）或通过配置中心统一分发。本地仓储需提供高效的查询结构（如内存 `std::unordered_set` 或布隆过滤器）进行本地快速匹配。
-* **事后拦截:** 若用户在留言后才被加入黑名单，系统应能触发 `EraseComment` 对其历史留言进行原子抹除。
+### 阶段三:HTTP L7 解析与路由
 
-联动架构设计
+**目标**:从「透明字节搬运」升级为「理解 HTTP」,按请求内容选择上游。
+
+<aside>
+💡
+
+**核心设计:单一 `ParseHeaders` + 可插拔 `BodySink`**(贴近真实 nginx)。nginx 并非靠两套解析器区分源站与代理——它的头部解析永远是增量式、只到头部为止;「整包 vs 流式」本质是 **body 处理策略**(`proxy_request_buffering on/off`),而非解析器之别。因此本项目也只保留**一个**只解析到头部的 `ParseHeaders`,body 交给可插拔的 `BodySink`,由调用方决定缓冲还是流式。
+
+</aside>
+
+**✅ 已完成(可复用的解析基础)**
+
+- [x]  `HttpContext` 解析请求行 + 头部(`FindCRLF`/`RetrieveUntil`),header key 统一小写。
+- [x]  解析状态机挂在 `TcpConnection::context_`(`std::any` + `shared_ptr`)。
+- [x]  半包/粘包处理、pipelining、keep-alive `Reset()` 复用。
+- [x]  Content-Length body 解析(将重构为 `BufferingSink`,见下)。
+
+**🔧 解析器重构:单一 `ParseHeaders` + body sink(本阶段核心)**
+
+- [ ]  **`ParseHeaders(Buffer*)` 成为唯一解析入口**:增量、半包安全,只解析到空行(header 结束)即停;新增状态 `kGotHeaders` 与查询接口 `GotHeaders()` / `HasBody()` / `BodyRemaining()`。
+- [ ]  **定义可插拔 `BodySink` 接口**:`OnBodyData(const char*, size_t)` 来一块处理一块 + `OnBodyEnd()` 结束回调。body 字节不再焊死进 `request_.body`。
+- [ ]  **`BufferingSink`(源站 server)**:把 body append 到 `request_.body`,`OnBodyEnd` 时回调业务 handler——等价于现有整包行为,由它**取代**老的 `ParseRequest`,不再保留两套解析逻辑。
+- [ ]  **`ForwardingSink`(反向代理)**:直接 `upstream_conn->Send(data, len)` 流式透传,零缓冲,天然背压(配合阶段二暂停读)。
+- [ ]  (可选)**`SpillingSink`**:内存超阈值落盘,对标 nginx `proxy_request_buffering on` 的临时文件方案。
+- [ ]  body 长度边界由 `HttpContext` 统一管控(Content-Length 递减计数),sink 只负责「怎么处理这块字节」,不关心边界。
+
+**🔀 代理路由与头部改写**
+
+- [ ]  头部**重写后再下发**:基于解析出的字段重建请求行+头部(改写 `Host`、追加 `X-Forwarded-For`/`X-Real-IP`),而非原样透传。
+- [ ]  支持按 `Host` / `path` 前缀路由(对应 nginx 的 `location`)。
+- [ ]  `Transfer-Encoding: chunked`:本期至少**识别并安全处理**(实现 chunk-size 扫描透传,或暂返 501)。
+
+**🛡️ 解析器加固(正确性/安全)**
+
+- [ ]  `isspace`/`tolower` 入参改 `static_cast<unsigned char>`,修非 ASCII 头的 UB。
+- [ ]  增加 `kMaxBodySize` / `kMaxHeaderSize` 上限,超限返 413/431,防超大 Content-Length 撑爆缓冲。
+- [ ]  可重复头(`X-Forwarded-For`、`Set-Cookie`)改为可追加,避免 `map[key]=value` 覆盖。
+- [ ]  核对 `Reset()` 同时清空 `state_` 与整个 `request_`(method/path/query/version/headers/body)。
+- **验收**:同一套 `ParseHeaders` 同时支撑源站(`BufferingSink`)与代理(`ForwardingSink`);大文件经代理上传时内存平稳(不整包缓冲);不同 `path` 路由到不同后端;`X-Forwarded-For` 正确携带客户端 IP。
+
+### 阶段四:上游池与负载均衡
+
+**目标**:从「单个写死后端」升级为「一组后端 + 负载均衡」。
+
+- [ ]  新增 `Upstream`:管理一组后端地址。
+- [ ]  负载均衡策略:`round-robin`(必做)、`least-conn` / 加权(可选)。
+- [ ]  上游连接池 / keep-alive 复用,降低频繁握手开销。
+- [ ]  后端不可达时的快速失败与重试到下一个后端。
+- **验收**:多后端轮询命中均衡;摘除一个后端后流量自动绕开。
+
+### 阶段五:配置化
+
+**目标**:把写死的参数变成可配置,贴近 nginx 使用方式。
+
+- [ ]  配置文件(建议先用简单格式,如 JSON/INI):`listen` 端口、`worker`(sub_loop)数、`upstream` 列表、`location` 路由规则。
+- [ ]  启动时加载并校验配置,非法配置明确报错。
+- **验收**:仅改配置文件即可调整监听端口、后端列表与路由,无需改代码重编译逻辑。
+
+### 阶段六:可靠性与可观测
+
+**目标**:让代理可上线运行、可排障。
+
+- [ ]  连接超时:`connect` 超时、上游响应超时、空闲连接回收。
+- [ ]  健康检查:被动(连续失败剔除)+ 可选主动探测。
+- [ ]  错误处理:上游不可用时返回 `502/504` 错误页。
+- [ ]  日志:访问日志(客户端 IP、path、状态码、耗时)+ 错误日志。
+- [ ]  基础指标:活跃连接数、QPS、各后端命中数。
+- **验收**:杀掉后端时客户端收到 502 而非挂起;日志能还原一次完整转发。
+
+## 3. 新增 / 改动组件清单
+
+| 组件 | 类型 | 职责 | 所属阶段 |
+| --- | --- | --- | --- |
+| `Connector` | 🆕 新增 | 非阻塞主动 connect 上游 | 一 |
+| `TcpClient` | 🆕 新增 | 封装 Connector,产出上游连接(对称于 TcpServer) | 一 |
+| `ProxySession` | 🆕 新增 | 桥接上下游连接 + 双向数据泵 + 流控 | 一/二 |
+| `TcpConnection` | ✏️ 改动 | 补 WriteComplete/HighWaterMark 回调与 Send 重载 | 二 |
+| `HttpContext` / 解析器 | ✏️ 已有·需重构 | 单一 `ParseHeaders`  • 可插拔 `BodySink`(Buffering / Forwarding / Spilling) | 三 |
+| `Upstream` / LB | 🆕 新增 | 后端集群 + 负载均衡 + 连接池 | 四 |
+| `Config` | 🆕 新增 | 配置加载与校验 | 五 |
+
+## 4. 目标架构(加上反代后)
+
+```mermaid
+flowchart LR
+    Client["公网客户端"] -->|"请求"| DownConn["下游 TcpConnection"]
+    DownConn --> PS["ProxySession 桥接"]
+    PS --> UpConn["上游 TcpConnection"]
+    TC["TcpClient + Connector"] -.->|"非阻塞 connect"| UpConn
+    UpConn -->|"connect"| Upstream["后端服务器"]
+    Upstream -->|"响应"| UpConn
+    UpConn --> PS
+    PS --> DownConn
+    DownConn -->|"响应"| Client
 ```
 
-[HTTP POST /api/comment] 
-         │
-         ▼
-  httpDispatcher ──(1. 校验)──► BlacklistManager (高效内存读取，读写锁/原子指针)
-         │                               │
-         ├── [命中黑名单] ──► 返回 403     │ (2. 定时或通过 /api/admin/reload 触发)
-         │                               ▼
-         └── [通过校验] ──► CommentRepository::PushComment(...) ──► 异步写 SQLite
+## 5. 里程碑顺序与依赖
 
+```mermaid
+flowchart TB
+    P1["阶段一 L4 透明转发(MVP)"]
+    P2["阶段二 背压与流控"]
+    P3["阶段三 HTTP L7 解析与路由"]
+    P4["阶段四 上游池与负载均衡"]
+    P5["阶段五 配置化"]
+    P6["阶段六 可靠性与可观测"]
+    P1 --> P2 --> P3 --> P4 --> P5 --> P6
 ```
 
+## 6. 风险与开放问题
+
+- **跨 loop 约束**:上游连接必须与下游连接在同一 sub_loop,否则破坏「单线程无锁」前提。`Connector` 必须在该 loop 内发起。
+- **生命周期**:`ProxySession` 同时引用两条连接,任一端先关时的销毁顺序需用 `shared_ptr` + `QueueInLoop` 谨慎处理,避免悬空。
+- **半关闭语义**:下游 `FIN` 后是否要继续把上游剩余响应回传(需支持单向半关闭一段时间)。
+- **背压优先级**:阶段二虽排在 L7 之前,但它是「正确性」前提;如果先做 L7 再补流控,大文件转发很容易先踩 OOM。
+- **待定**:配置文件格式(自研简单格式 vs 复用 JSON 库)、是否本期就要 keep-alive 到上游。
+
+<aside>
+📌
+
+**最小可用路径建议**:先死磕**阶段一 + 阶段二**,跑通「能转发 + 不爆内存」,这就是一个可用的 L4 反向代理 MVP;L7 及以后按需迭代。
+
+</aside>
 
 
-### 2.3 需求三：动态热加载 (Dynamic Hot-Reload)
-
-* **功能描述:** 在不重启服务器的前提下，动态更新黑名单规则和系统控制参数。
-* **业务规则:**
-* **触发机制:** 支持通过外部信号（如 `SIGHUP`）、文件变动监听（如 `inotify`）或配置中心的回调通知触发加载。
-* **无缝切换:** 热加载期间，`PushComment` 和 `GetLatestComments` 的读写请求不能被长时间阻塞。应采用 **双缓冲（Double Buffering）** 或原子指针切换（`std::atomic<std::shared_ptr<...>>`）来实现配置的无锁/低锁切换。
-
-
-
----
-
-## 3. 非功能性需求与技术约束
-
-### 3.1 性能与并发
-
-* `PushComment` 的平均耗时增幅应控制在微秒级，绝不允许因为写磁盘或同步请求网络而导致接口卡顿。
-* 保持现有的线程安全级别，避免因新引入的持久化/黑名单逻辑引发死锁（Deadlock）或竞态条件（Race Condition）。
-
-### 3.2 容错与降级
-
-* 若分布式黑名单服务（如 Redis）宕机，系统应能自动降级为“使用本地最后一次成功加载的黑名单快照”，并记录 Error 级别日志，保证核心留言功能不中断。
-
----
-
-## 4. 关键接口变更预测 (Refactoring Preview)
-
-为了实现上述需求，`CommentRepository` 的接口或内部结构预计会有以下调整：
-
-```cpp
-// 伪代码：预计需要扩充的内部组件或接口
-class CommentRepository {
-public:
-    // 初始化，传入持久化路径及黑名单加载器
-    static void Initialize(const std::string& db_path);
-    
-    // 原有接口保持兼容，但内部逻辑升级
-    static void PushComment(const std::string& nickname, const std::string& content);
-    
-    // 触发热加载的接口
-    static void ReloadBlacklist(); 
-};
-
-```
-
----
-
-
-联动架构设计
-```
-
-[HTTP POST /api/comment] 
-         │
-         ▼
-  httpDispatcher ──(1. 校验)──► BlacklistManager (高效内存读取，读写锁/原子指针)
-         │                               │
-         ├── [命中黑名单] ──► 返回 403     │ (2. 定时或通过 /api/admin/reload 触发)
-         │                               ▼
-         └── [通过校验] ──► CommentRepository::PushComment(...) ──► 异步写 SQLite
-
-```
+建议实现顺序
+EventLoop 定时器（timerfd + TimerQueue + RunAfter/CancelTimer）→ 单独可测：RunAfter(1.0, cb) 看回调是否准时。
+Connector（非阻塞 connect 状态机 + 退避重试）→ 用一个临时小测试连本地端口验证成功/失败/重试三条路径。
+再进 TcpClient → ProxySession。
+接口如果 OK，我就先动手写 EventLoop 定时器部分（TimerQueue 类 + EventLoop 的改动），还是你想先把 Connector 的 .cpp 写出来、定时器那块你自己补？
