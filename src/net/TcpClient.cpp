@@ -16,7 +16,7 @@ TcpClient::Ptr TcpClient::Create(EventLoop* loop, const std::string& ip, int por
 
 TcpClient::TcpClient(EventLoop* loop, const std::string& ip, int port)
     : loop_(loop),
-      connector_(std::make_unique<Connector>(loop, ip, port)),
+      connector_(Connector::Create(loop, ip, port)),
       connect_(true)
 {
 }

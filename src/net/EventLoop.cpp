@@ -17,10 +17,10 @@ static constexpr int kInitEventListSize = 16;
 EventLoop::EventLoop()
     : epoll_fd_(-1),
       wakeup_fd_(-1),
-      timer_fd_(-1),
       quit_(false),
       events_(kInitEventListSize),
-      thread_id_(std::this_thread::get_id())
+      thread_id_(std::this_thread::get_id()),
+      timer_fd_(-1)
 {
     pthread_mutex_init(&mutex_, nullptr); // 初始化互斥锁
     // 1. 创建 epoll实例
