@@ -66,12 +66,34 @@ add_custom_command(TARGET web_server POST_BUILD
 target_link_libraries(web_server PRIVATE reactor pthread dl)
 
 # ============================================================================
-# 6. 工程构建调试打印（方便盘查文件搜集是否发生物理错漏）
+# 5. 构建阶段一 L4 反向代理测试服务：proxy_server
+# ============================================================================
+set(PROXY_APP_SOURCES
+    ${PROJECT_SOURCE_DIR}/app/proxy_main.cpp
+)
+
+add_executable(proxy_server ${PROXY_APP_SOURCES})
+
+target_link_libraries(proxy_server PRIVATE
+    reactor
+    pthread
+    dl
+)
+
+# 注意：
+# proxy_server 阶段一只做 L4 透明转发，不需要 config / www，
+# 所以这里不添加 POST_BUILD copy_directory。
+
+# ============================================================================
+# 6. 工程构建调试打印
 # ============================================================================
 message(STATUS "--------------------------------------------------------")
 message(STATUS "📦 [CMake]: 成功搜集到框架层源码 (src/): \n ${FRAMEWORK_SOURCES}")
-message(STATUS "🚀 [CMake]: 成功搜集到业务层源码 (app/): \n ${APP_SOURCES}")
+message(STATUS "🚀 [CMake]: Web 服务源码: \n ${APP_SOURCES}")
+message(STATUS "🔀 [CMake]: Proxy 服务源码: \n ${PROXY_APP_SOURCES}")
 message(STATUS "--------------------------------------------------------")
 
-# 构建安装规则（可选，保持你原本的规范）
-install(TARGETS web_server DESTINATION bin)
+# ============================================================================
+# 7. 安装规则
+# ============================================================================
+install(TARGETS web_server proxy_server DESTINATION bin)
