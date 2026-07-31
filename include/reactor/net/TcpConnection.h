@@ -22,6 +22,10 @@ public:
     using MessageCallback = std::function<void(const std::shared_ptr<TcpConnection>&, Buffer*)>;
     using CloseCallback = std::function<void(const std::shared_ptr<TcpConnection>&)>;
     using ConnectionCallback = std::function<void(const std::shared_ptr<TcpConnection>&)>;
+    // 发送缓冲清空时触发（output_buffer_ 被完全写入内核）
+    using WriteCompleteCallback = std::function<void(const std::shared_ptr<TcpConnection>&)>;
+    // 积压超过高水位阈值时触发，参数为当前积压字节数
+    using HighWaterMarkCallback = std::function<void(const std::shared_ptr<TcpConnection>&, size_t)>;
 
     TcpConnection(EventLoop* loop, int conn_fd);
     ~TcpConnection();
@@ -37,6 +41,16 @@ public:
 
     // 业务层 TcpSever 调用的非阻塞发送
     void Send(const std::string& msg);
+    // 零/少拷贝发送重载：直接从裸指针或 Buffer 发送，避免中转 std::string
+    void Send(const void* data, size_t len);
+    // 从 Buffer 直接发送并消费其可读数据（发送后 RetrieveAll），供代理转发零拷贝路径
+    void Send(Buffer* buf);
+
+    // 供上层（如 ProxySession 流控）暂停 / 恢复本连接的读事件。
+    // 线程安全：内部经 RunInLoop 派发到所属 loop 线程执行。
+    void EnableReading();
+    void DisableReading();
+
     // 连接建立时的初始化（挂载红黑树）
     void ConnectionEstablished();
     // 连接解体时的资源销毁
@@ -58,6 +72,12 @@ public:
     void SetMessageCallback(MessageCallback cb) { message_callback_ = std::move(cb); }
     void SetCloseCallback(CloseCallback cb) { close_callback_ = std::move(cb); }
     void SetConnectionCallback(ConnectionCallback cb) { connection_callback_ = std::move(cb); }
+    void SetWriteCompleterCallback(WriteCompleteCallback cb) { write_complete_callback_ = std::move(cb); }
+    // 设置高水位回调及其阈值（字节）
+    void SetHighWaterMarkCallback(HighWaterMarkCallback cb, size_t high_water_mark) {
+        high_water_mark_callback_ = std::move(cb);
+        high_water_mark_ = high_water_mark;
+    }
 
 private:
     // 提供给内核底层
@@ -65,6 +85,9 @@ private:
     void HandleRead();  // 给 channel 的底层读驱动
     void HandleWrite(); // 底层驱动写：output_buffer_ -> 内核
     void HandleClose(); // 底层驱动关闭 -> 叫醒 TcpServer 清理 Map
+
+    // 各 Send 重载共用的核心发送逻辑（假定运行在所属 loop 线程内）
+    void SendInLoop(const char* data, size_t len);
 
     EventLoop* loop_;
     int conn_fd_;
@@ -78,6 +101,10 @@ private:
     MessageCallback message_callback_;
     CloseCallback close_callback_;
     ConnectionCallback connection_callback_;
+    WriteCompleteCallback write_complete_callback_;
+    HighWaterMarkCallback high_water_mark_callback_;
+    // 高水位阈值：output_buffer_ 积压超过它触发 HighWaterMarkCallback，默认 64MiB
+    size_t high_water_mark_ = 64 * 1024 * 1024;
 };
 
 } // namespace reactor::net

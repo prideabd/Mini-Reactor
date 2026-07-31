@@ -93,6 +93,9 @@ void TcpConnection::HandleRead() {
             if (message_callback_) {
                 message_callback_(shared_from_this(), &input_buffer_);
             }
+            if (channel_ && !channel_->IsReading()) {
+                break;
+            }
         } 
         // 核心拦截点：非阻塞套接字被薅空的标准信号
         else if (n < 0) {
@@ -130,6 +133,17 @@ void TcpConnection::HandleWrite() {
                 // 读完了，注销写监听事件
                 channel_->DisableWriting();
 
+                // 发送缓冲已清空：投递 WriteCompleteCallback（供上层恢复被暂停的读端等）
+                // 同样需要在执行时复检：投递后、执行前缓冲区可能又被写满。
+                if (write_complete_callback_) {
+                    loop_->QueueInLoop([self = shared_from_this()]() {
+                        if (self->output_buffer_.ReadableBytes() == 0 &&
+                            self->write_complete_callback_) {
+                            self->write_complete_callback_(self);
+                        }
+                    });
+                }
+
                 // 如果发现当前状态是 kDisconnecting（说明业务之前申请过 Shutdown，但当时因为有积压被卡住了）
                 // 既然现在已经发完了，立刻在 I/O 线程就地执行系统调用，关闭写端，安全降落！
                 if (state_ == kDisconnecting) {
@@ -159,18 +173,57 @@ void TcpConnection::HandleClose() {
     }
 }
 
-// 非阻塞无损发送
+// 非阻塞无损发送（std::string 重载，保持向后兼容）
 void TcpConnection::Send(const std::string& msg) {
+    SendInLoop(msg.data(), msg.size());
+}
+
+// 零/少拷贝重载：直接从裸指针发送，避免构造中转 std::string
+void TcpConnection::Send(const void* data, size_t len) {
+    SendInLoop(static_cast<const char*>(data), len);
+}
+
+// 从 Buffer 直接发送：发完消费其可读区，代理转发时避免一次数据拷贝
+void TcpConnection::Send(Buffer* buf) {
+    if (buf == nullptr) {
+        return;
+    }
+    SendInLoop(buf->Peek(), buf->ReadableBytes());
+    buf->RetrieveAll();
+}
+
+// 各 Send 重载共用的核心发送逻辑（假定运行在所属 loop 线程内）
+void TcpConnection::SendInLoop(const char* data, size_t len) {
+    // 连接已彻底断开，丢弃数据，避免向无效 fd 写入
+    if (state_ == kDisconnected) {
+        LOG_WARN << "⚠️ [TcpConnection::SendInLoop]: 连接已关闭，丢弃 [" << len
+                 << "] 字节，FD: " << conn_fd_;
+        return;
+    }
     ssize_t nwrote = 0;
-    size_t remaining = msg.size();
+    size_t remaining = len;
     bool faultError = false;
 
     // 输出缓冲区没有积压，直接放套接字
     if (output_buffer_.ReadableBytes() == 0) {
-        // 套接字尽可能接收，剩下还存放在 msg 中
-        nwrote = ::write(conn_fd_, msg.data(), msg.size());
+        // 套接字尽可能接收，剩下放进输出缓冲区
+        nwrote = ::write(conn_fd_, data, len);
         if (nwrote >= 0) {
-            remaining = msg.size() - nwrote;
+            remaining = len - nwrote;
+            // 一次性全部发完，且注册了发送完成回调，则投递触发
+            if (remaining == 0 && write_complete_callback_) {
+                // ⚠️ 入队时缓冲区确实是空的，但 QueueInLoop 是推迟执行的，
+                // 等真正执行时，ET 读循环可能已经把它重新灌满。
+                // 必须在执行那一刻复检，否则上层会收到过期的“已排空”通知，
+                // 在积压仍高时误恢复读对端；而高水位回调只在“跨越”阈值时
+                // 触发一次，此后不再有暂停信号，读循环会失控地把整个响应体吞进来。
+                loop_->QueueInLoop([self = shared_from_this()]() {
+                    if (self->output_buffer_.ReadableBytes() == 0 &&
+                        self->write_complete_callback_) {
+                        self->write_complete_callback_(self);
+                    }
+                });
+            }
         } else {
             nwrote = 0;
             // 良性警告，无需触发 faultError
@@ -181,13 +234,50 @@ void TcpConnection::Send(const std::string& msg) {
     }
     // 多余出来的字节，存放到输出缓冲区 output_buffer_，并注册写监听事件
     if (!faultError && remaining > 0) {
-        output_buffer_.Append(msg.data() + nwrote, remaining);
+        // 高水位判定： 仅在积压“跨越”阈值那一刻触发一次，避免每次 Send 回调
+        size_t old_len = output_buffer_.ReadableBytes();
+        const bool cross_high_water =
+            (old_len < high_water_mark_ &&
+             old_len + remaining >= high_water_mark_ &&
+             high_water_mark_callback_);
+
+        output_buffer_.Append(data + nwrote, remaining);
         if (!channel_->IsWriting()) {
             LOG_DEBUG << "🔄 [TcpConnection::Send]: 内核写缓冲区已满！剩余 [" << remaining 
                       << "] 字节暂存，启动 EPOLLOUT 监听。";
             channel_->EnableWriting(); // 注册写监听事件
         }
+
+        // ⚠️ 必须同步（内联）调用，绝不能用 QueueInLoop 推迟：
+        // 本库 HandleRead 是 ET 模式下“循环读到 EAGAIN 为止”。若把高水位回调
+        // 推迟到本轮事件处理结束后的 pending functors 才执行，
+        // 回调里的 DisableReading() 就赶不上——读循环早���把整个响应体
+        // 榨干并灌进 output_buffer_，背压彻底失效（HandleRead 里的
+        // IsReading() 检查会因为状态还未被修改而永远不成立）。
+        // muduo 原版可以 queueInLoop，是因为它默认 LT 模式、每次事件只 readv 一次。
+        // 放在函数最后调用：返回后不再触碰任何成员，重入也安全。
+        if (cross_high_water) {
+            high_water_mark_callback_(shared_from_this(), old_len + remaining);
+        }
     }
+}
+
+// 暂停 / 恢复本连接读事件（供上层流控）。经 RunInLoop 保证在所属 loop 线程执行，
+// 并用 shared_from_this() 延寿，避免异步回调访问已析构连接。
+void TcpConnection::EnableReading() {
+    loop_->RunInLoop([this, guard = shared_from_this()]() {
+        if (channel_) {
+            channel_->EnableReading();
+        }
+    });
+}
+
+void TcpConnection::DisableReading() {
+    loop_->RunInLoop([this, guard = shared_from_this()]() {
+        if (channel_) {
+            channel_->DisableReading();
+        }
+    });
 }
 
 } // namespace reactor::net

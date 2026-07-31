@@ -27,7 +27,7 @@ void AsyncOutputProxy(const char* msg, int len) {
     }
 }
 
-void GracefulShutdownHandler(int signum) {
+void GracefulShutdownHandler(int /*signum*/) {
     if (g_main_loop) {
         g_main_loop->QuitFromSignal();
     }

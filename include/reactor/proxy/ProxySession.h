@@ -47,6 +47,12 @@ private:
     void OnUpstreamData(const TcpConnectionPtr& up_conn, Buffer* buf);  // 上游 -> 下游
     void OnUpstreamError();                                             // 上游连接失败/重试通知
 
+    // ---- 流控（背压）----
+    // 给下游连接装高水位 / 写完成回调（下游写积压时暂停读上游）
+    void InstallDownstreamFlowControl();
+    // 给上游连接装高水位 / 写完成回调（上游写积压时暂停读下游）
+    void InstallUpstreamFlowControl();
+
     EventLoop* loop_;
 
     // 新版 TcpClient 必须由 TcpClient::Create() 创建，并以 shared_ptr 持有。
@@ -58,6 +64,14 @@ private:
     std::string pending_up_;        // 上游握手完成前暂存下游数据
     bool up_ready_ = false;         // 上游是否已连接成功
     bool tearing_down_ = false;     // 防止 Teardown 重入
+
+    // ---- 流控状态 ----
+    // 下游读因“上游写积压”被暂停（down -> up 方向背压）
+    bool down_read_paused_ = false;
+    // 上游读因“下游写积压”被暂停（up -> down 方向背压）
+    bool up_read_paused_ = false;
+    // 代理高水位阈值（1 MiB）：某端输出积压跨越它就暂停读另一端
+    static constexpr size_t kProxyHighWaterMark = 1 * 1024 * 1024;
 };
 
 } // namespace reactor::net

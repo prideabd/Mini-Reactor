@@ -48,7 +48,91 @@ void ProxySession::Start() {
         }
     });
 
+    // 下游连接已经存在，先给它装上流控回调（up -> down 方向背压）。
+    // 高水位 / 写完成回调与 TcpServer 设置的 message/connection 回调互不干扰。
+    InstallDownstreamFlowControl();
+
     client_->Connect();
+}
+
+// 给下游连接装流控回调：下游发送缓冲区（up -> down 写入）积压跨越高水位时，
+// 暂停读上游；下游排空后恢复读上游。
+void ProxySession::InstallDownstreamFlowControl() {
+    if (!down_conn_) {
+        return;
+    }
+    std::weak_ptr<ProxySession> weak_self = weak_from_this();
+
+    // 下游积压过高 -> 暂停读上游
+    down_conn_->SetHighWaterMarkCallback(
+        [weak_self](const TcpConnectionPtr& /*down*/, size_t mark) {
+            auto self = weak_self.lock();
+            if (!self || self->tearing_down_) {
+                return;
+            }
+            if (self->up_conn_ && !self->up_read_paused_) {
+                self->up_conn_->DisableReading();
+                self->up_read_paused_ = true;
+                LOG_INFO << "⏸️ [Proxy] 下游积压 " << mark
+                         << " 字节跨越高水位，暂停读上游";
+            }
+        },
+        kProxyHighWaterMark
+    );
+    
+    // 下游发送缓冲清空 -> 恢复读上游
+    down_conn_->SetWriteCompleterCallback(
+        [weak_self](const TcpConnectionPtr& /*down*/) {
+            auto self = weak_self.lock();
+            if (!self || self->tearing_down_) {
+                return;
+            }
+            if (self->up_conn_ && self->up_read_paused_) {
+                self->up_conn_->EnableReading();
+                self->up_read_paused_ = false;
+                LOG_INFO << "▶️ [Proxy] 下游已排空，恢复读上游";
+            }
+        }
+    );
+}
+
+// 给上游连接装流控回调：上游发送缓冲区（down -> up 写入）积压跨越高水位时，
+// 暂停读下游；上游排空后恢复读下游。在上游连接建立后调用。
+void ProxySession::InstallUpstreamFlowControl() {
+    if (!up_conn_) {
+        return;
+    }
+    std::weak_ptr<ProxySession> weak_self = weak_from_this();
+
+    // 上游积压过高 -> 暂停读下游
+    up_conn_->SetHighWaterMarkCallback(
+        [weak_self](const TcpConnectionPtr& /*up*/, size_t mark) {
+            auto self = weak_self.lock();
+            if (!self || self->tearing_down_) {
+                return;
+            }
+            if (self->down_conn_ && !self->down_read_paused_) {
+                self->down_conn_->DisableReading();
+                self->down_read_paused_ = true;
+                LOG_INFO << "⏸️ [Proxy] 上游积压 " << mark
+                         << " 字节跨越高水位，暂停读下游";
+            }
+        },
+        kProxyHighWaterMark);
+
+    // 上游发送缓冲清空 -> 恢复读下游
+    up_conn_->SetWriteCompleterCallback(
+        [weak_self](const TcpConnectionPtr& /*up*/) {
+            auto self = weak_self.lock();
+            if (!self || self->tearing_down_) {
+                return;
+            }
+            if (self->down_conn_ && self->down_read_paused_) {
+                self->down_conn_->EnableReading();
+                self->down_read_paused_ = false;
+                LOG_INFO << "▶️ [Proxy] 上游已排空，恢复读下游";
+            }
+        });
 }
 
 void ProxySession::OnUpstreamConnection(const TcpConnectionPtr& up_conn) {
@@ -62,6 +146,9 @@ void ProxySession::OnUpstreamConnection(const TcpConnectionPtr& up_conn) {
         up_ready_ = true;
 
         LOG_INFO << "🔗 [Proxy] 上游已就绪，桥接建立 FD [" << up_conn->GetFd() << "]";
+
+        // 上游连接就绪，给它装上流控回调（down -> up 方向背压）。
+        InstallUpstreamFlowControl();
 
         // 上游连接建立前，下游可能已经发来数据；此处一次性冲刷。
         if (!pending_up_.empty()) {
@@ -103,19 +190,17 @@ void ProxySession::OnDownstreamData(Buffer* buf) {
         return;
     }
 
-    std::string data(buf->Peek(), buf->ReadableBytes());
-    buf->RetrieveAll();
-
-    if (data.empty()) {
+    if (buf->ReadableBytes() == 0) {
         return;
     }
 
     if (up_ready_ && up_conn_) {
-        up_conn_->Send(data);
+        up_conn_->Send(buf);
     } else {
         // 上游握手尚未完成时先暂存。
         // 注意：阶段一暂未做 pending_up_ 大小限制，阶段二/六应加背压和上限
-        pending_up_ += data;
+        pending_up_.append(buf->Peek(), buf->ReadableBytes());
+        buf->RetrieveAll();
     }
 }
 
@@ -126,15 +211,15 @@ void ProxySession::OnUpstreamData(const TcpConnectionPtr& /*up_conn*/, Buffer* b
         return;
     }
 
-    std::string data(buf->Peek(), buf->ReadableBytes());
-    buf->RetrieveAll();
-
-    if (data.empty()) {
+    if (buf->ReadableBytes() == 0) {
         return;
     }
 
     if (down_conn_) {
-        down_conn_->Send(data);
+        // 零拷贝转发：直接从 Buffer 发送并消费；若下游写积压，高水位回调会暂停读上游。
+        down_conn_->Send(buf);
+    } else {
+        buf->RetrieveAll();
     }
 }
 
@@ -152,6 +237,8 @@ void ProxySession::Teardown() {
     }
 
     up_ready_ = false;
+    up_read_paused_= false;
+    down_read_paused_ = false;
     up_conn_.reset();
     pending_up_.clear();
 
